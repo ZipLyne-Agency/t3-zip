@@ -39,6 +39,7 @@ import {
 import { useAcknowledgeThreadWoke, useThreadActions } from "../../hooks/useThreadActions";
 import { settleAndAdvance } from "../../settleAndAdvance";
 import type { ChatShortcutCommands } from "./useChatShortcuts";
+import { isIndefiniteSnooze } from "../indefiniteSnooze";
 import { resolveThreadLastVisitedAt } from "../Sidebar.logic";
 import { scopedThreadKey, scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { type SetStateAction, useRef, useState } from "react";
@@ -635,9 +636,10 @@ export function useThreadLifecycle(input: ThreadLifecycleInput) {
   const snoozedUntil = activeThreadShell?.snoozedUntil ?? null;
   const settledAt = activeThreadShell?.settledAt ?? null;
   // Same rounding as the sidebar's snoozed shelf, so both read the same hour.
+  const snoozedIndefinitely = isIndefiniteSnooze(snoozedUntil);
   const snoozeNow = `${nowMinute}:00.000Z`;
   const snoozeWake =
-    snoozedUntil && Date.parse(snoozedUntil) > Date.parse(snoozeNow)
+    snoozedUntil && !snoozedIndefinitely && Date.parse(snoozedUntil) > Date.parse(snoozeNow)
       ? snoozeWakeLabel(snoozedUntil, { now: snoozeNow }, messages)
       : null;
   const threadStatusLine = activeThreadSnoozed ? (
@@ -645,9 +647,11 @@ export function useThreadLifecycle(input: ThreadLifecycleInput) {
       <ThreadStatusLine
         icon={<AlarmClockIcon />}
         label={
-          snoozeWake
-            ? gt("Snoozed, {remaining} left", { remaining: snoozeWake })
-            : gt("Snoozed", { $context: "thread status" })
+          snoozedIndefinitely
+            ? gt("Snoozed until you wake it")
+            : snoozeWake
+              ? gt("Snoozed, {remaining} left", { remaining: snoozeWake })
+              : gt("Snoozed", { $context: "thread status" })
         }
         clockMinute={nowMinute}
         actionLabel={isUnsnoozing ? gt("Waking...") : gt("Wake now")}

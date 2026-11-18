@@ -21,6 +21,7 @@ import serverPackageJson from "../../../server/package.json" with { type: "json"
 
 import * as DesktopBackendManager from "./DesktopBackendManager.ts";
 import * as DesktopCliShim from "../app/DesktopCliShim.ts";
+import { T3_ZIP, T3_ZIP_NAME } from "../app/T3Zip.ts";
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
 import * as DesktopState from "../app/DesktopState.ts";
 import * as DesktopServerExposure from "./DesktopServerExposure.ts";
@@ -571,6 +572,8 @@ const resolvePrimaryStartConfig = Effect.fn("desktop.backendConfiguration.resolv
         T3CODE_DESKTOP_SHELL_DISCOVERY_PENDING: "1",
         T3CODE_CLI_PATH: Option.getOrUndefined(input.cliPath),
         [DESKTOP_HOST_SCOPE_ENV]: input.hostScope,
+        // T3 Zip runs beside T3 Code on the same Mac; its own name keeps the two apart on phones.
+        ...(T3_ZIP ? { T3CODE_ENVIRONMENT_LABEL_SUFFIX: T3_ZIP_NAME } : {}),
       },
       extendEnv: true,
       bootstrap,

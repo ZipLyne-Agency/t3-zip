@@ -6,6 +6,7 @@ import { useState } from "react";
 import {
   threadUndoLabel,
   undoLatestThreadAction,
+  type ThreadUndoAction,
   useThreadUndoNotice,
 } from "../../hooks/showThreadUndoNotice";
 import { cn } from "../../lib/utils";
@@ -19,7 +20,10 @@ const SHORT_SUMMARY = {
   Unpinned: msg("{count, plural, =1 {Unpinned,} other {Unpinned {count},}}"),
   Archived: msg("{count, plural, =1 {Archived,} other {Archived {count},}}"),
   Discarded: msg("{count, plural, =1 {Discarded,} other {Discarded {count},}}"),
-};
+  Cleared: msg("{count, plural, =1 {Cleared,} other {Cleared {count},}}"),
+  Muted: msg("{count, plural, =1 {Muted,} other {Muted {count},}}"),
+  Unmuted: msg("{count, plural, =1 {Unmuted,} other {Unmuted {count},}}"),
+} satisfies Record<ThreadUndoAction, string>;
 
 /** Fills the free space in the sidebar footer's utility row, so it never moves or covers the list. */
 export function SidebarThreadUndoNotice() {

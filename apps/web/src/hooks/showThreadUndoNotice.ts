@@ -16,12 +16,27 @@ import { primaryServerKeybindingsAtom } from "../state/server";
 import * as ThreadUndo from "@t3tools/client-runtime/state/thread-undo";
 
 type UndoOptions = {
-  action: "Settled" | "Snoozed" | "Unpinned" | "Archived" | "Discarded";
+  action:
+    | "Settled"
+    | "Cleared"
+    | "Snoozed"
+    | "Unpinned"
+    | "Archived"
+    | "Discarded"
+    | "Muted"
+    | "Unmuted";
   undo: () => Promise<AtomCommandResult<unknown, unknown>>;
   failureTitle: string;
   claim: ReturnType<typeof ThreadUndo.begin>;
   commit?: () => void;
+  /**
+   * Runs once after a successful Undo. When several actions are undone together only the
+   * newest one's runs, so follow-ups such as reopening a closed tab do not race each other.
+   */
+  restored?: () => void;
 };
+
+export type ThreadUndoAction = UndoOptions["action"];
 
 type UndoNotice = {
   action: UndoOptions["action"];
@@ -33,18 +48,24 @@ export const useThreadUndoNotice = create<{ notice: UndoNotice | null }>(() => (
 
 const SUMMARY = {
   Settled: msg("Settled {count, plural, one {{count} thread} other {{count} threads}}"),
+  Cleared: msg("Cleared {count, plural, one {{count} thread} other {{count} threads}}"),
   Snoozed: msg("Snoozed {count, plural, one {{count} thread} other {{count} threads}}"),
   Unpinned: msg("Unpinned {count, plural, one {{count} thread} other {{count} threads}}"),
   Archived: msg("Archived {count, plural, one {{count} thread} other {{count} threads}}"),
   Discarded: msg("Discarded {count, plural, one {{count} draft} other {{count} drafts}}"),
+  Muted: msg("Muted {count, plural, one {{count} thread} other {{count} threads}}"),
+  Unmuted: msg("Unmuted {count, plural, one {{count} thread} other {{count} threads}}"),
 } satisfies Record<UndoOptions["action"], string>;
 
 const UNDONE = {
   Settled: msg("Undid settle of {count, plural, one {{count} thread} other {{count} threads}}"),
+  Cleared: msg("Undid clear of {count, plural, one {{count} thread} other {{count} threads}}"),
   Snoozed: msg("Undid snooze of {count, plural, one {{count} thread} other {{count} threads}}"),
   Unpinned: msg("Undid unpin of {count, plural, one {{count} thread} other {{count} threads}}"),
   Archived: msg("Undid archive of {count, plural, one {{count} thread} other {{count} threads}}"),
   Discarded: msg("Undid discard of {count, plural, one {{count} draft} other {{count} drafts}}"),
+  Muted: msg("Undid mute of {count, plural, one {{count} thread} other {{count} threads}}"),
+  Unmuted: msg("Undid unmute of {count, plural, one {{count} thread} other {{count} threads}}"),
 } satisfies Record<UndoOptions["action"], string>;
 
 function threadUndoNoticeSummary(notice: Pick<UndoNotice, "action" | "count">): string {
@@ -110,8 +131,10 @@ function refreshNotice() {
       for (const entry of current) entry.claim.finish();
       refreshNotice();
       let undone = 0;
+      const restoredEntries = new Set<UndoOptions>();
       await Promise.all(
-        current.map(async ({ undo, failureTitle }) => {
+        current.map(async (entry) => {
+          const { undo, failureTitle } = entry;
           const reportFailure = (error: unknown) => {
             toastManager.add(
               stackedThreadToast({
@@ -123,8 +146,10 @@ function refreshNotice() {
           };
           try {
             const result = await undo();
-            if (result._tag === "Success") undone++;
-            else if (!isAtomCommandInterrupted(result)) {
+            if (result._tag === "Success") {
+              undone++;
+              restoredEntries.add(entry);
+            } else if (!isAtomCommandInterrupted(result)) {
               reportFailure(squashAtomCommandFailure(result));
             }
           } catch (error) {
@@ -132,6 +157,8 @@ function refreshNotice() {
           }
         }),
       );
+      // `current` runs newest first, so this is the latest action that came back.
+      current.find((entry) => restoredEntries.has(entry))?.restored?.();
       // Failures already raise a toast, so only what was actually restored is spoken.
       if (undone > 0) {
         announce(m(UNDONE[latest.action], { count: undone }));

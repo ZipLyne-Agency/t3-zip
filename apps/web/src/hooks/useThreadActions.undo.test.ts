@@ -158,6 +158,42 @@ describe("concurrent thread action Undo", () => {
   );
 });
 
+describe("settle Undo", () => {
+  it("reopens a closed tab once the thread is restored", async () => {
+    const onUndone = vi.fn();
+    await useThreadActions().settleThread(target, { onUndone });
+    expect(onUndone).not.toHaveBeenCalled();
+    await currentUndo()();
+    expect(commands.unsettle).toHaveBeenCalledOnce();
+    expect(onUndone).toHaveBeenCalledOnce();
+  });
+
+  it("reopens only the tab closed last when one Undo restores several threads", async () => {
+    const first = vi.fn();
+    const last = vi.fn();
+    const actions = useThreadActions();
+    await actions.settleThread(target, { onUndone: first });
+    await actions.settleThread(
+      { ...target, threadId: ThreadId.make("thread-closed-last") },
+      { onUndone: last },
+    );
+    expect(useThreadUndoNotice.getState().notice).toMatchObject({ action: "Settled", count: 2 });
+    await currentUndo()();
+    expect(commands.unsettle).toHaveBeenCalledTimes(2);
+    expect(first).not.toHaveBeenCalled();
+    expect(last).toHaveBeenCalledOnce();
+  });
+
+  it("leaves the tab closed when restoring the thread fails", async () => {
+    const onUndone = vi.fn();
+    await useThreadActions().settleThread(target, { onUndone });
+    commands.unsettle.mockResolvedValue({ _tag: "Failure", cause: Cause.fail(new Error("no")) });
+    vi.spyOn(toastManager, "add").mockImplementation(() => "toast");
+    await currentUndo()();
+    expect(onUndone).not.toHaveBeenCalled();
+  });
+});
+
 describe("pin", () => {
   it("announces that the thread was pinned", async () => {
     vi.mocked(announce).mockClear();

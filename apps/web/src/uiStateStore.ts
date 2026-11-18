@@ -23,6 +23,8 @@ export interface PersistedUiState {
   projectExpandedById?: Record<string, boolean>;
   projectOrder?: string[];
   threadLastVisitedAtById?: Record<string, string>;
+  threadDoneClearedAtById?: Record<string, string>;
+  doneReviewSince?: string | null;
   collapsedProjectCwds?: string[];
   expandedProjectCwds?: string[];
   projectOrderCwds?: string[];
@@ -42,6 +44,17 @@ export interface UiProjectState {
 
 export interface UiThreadState {
   threadLastVisitedAtById: Record<string, string>;
+  /**
+   * When each thread was cleared from Done. A finished run newer than this lists the thread
+   * under Done again; an older one has been dealt with.
+   */
+  threadDoneClearedAtById: Record<string, string>;
+  /**
+   * When this device started keeping finished threads under Done until cleared. Runs that
+   * finished before it count as cleared, so existing threads do not all land in Done at once.
+   * Null until the store first loads, which sets it.
+   */
+  doneReviewSince: string | null;
   threadChangedFilesExpandedById: Record<string, Record<string, boolean>>;
 }
 
@@ -61,6 +74,8 @@ const initialState: UiState = {
   projectOrder: [],
   sidebarProjectScopeKeys: [],
   threadLastVisitedAtById: {},
+  threadDoneClearedAtById: {},
+  doneReviewSince: null,
   threadChangedFilesExpandedById: {},
   defaultAdvertisedEndpointKey: null,
   pullRequestMergeMethod: "merge",
@@ -145,6 +160,12 @@ export function parsePersistedState(parsed: PersistedUiState): UiState {
     projectExpandedById,
     projectOrder,
     threadLastVisitedAtById: sanitizeTimestampRecord(parsed.threadLastVisitedAtById),
+    threadDoneClearedAtById: sanitizeTimestampRecord(parsed.threadDoneClearedAtById),
+    doneReviewSince:
+      typeof parsed.doneReviewSince === "string" &&
+      Number.isFinite(Date.parse(parsed.doneReviewSince))
+        ? parsed.doneReviewSince
+        : null,
     threadChangedFilesExpandedById:
       parsed.threadChangedFilesExpansionVersion === THREAD_CHANGED_FILES_EXPANSION_VERSION
         ? sanitizePersistedThreadChangedFilesExpanded(parsed.threadChangedFilesExpandedById)
@@ -220,6 +241,8 @@ export function persistState(state: UiState): void {
         projectExpandedById: state.projectExpandedById,
         projectOrder: state.projectOrder,
         threadLastVisitedAtById: state.threadLastVisitedAtById,
+        threadDoneClearedAtById: state.threadDoneClearedAtById,
+        doneReviewSince: state.doneReviewSince,
         defaultAdvertisedEndpointKey: state.defaultAdvertisedEndpointKey,
         sidebarProjectScopeKeys: state.sidebarProjectScopeKeys,
         // Older clients read only this field.
@@ -289,6 +312,38 @@ export function markThreadUnread(
       [threadId]: unreadVisitedAt,
     },
   };
+}
+
+/** Clears threads from Done as of `clearedAt`; a run that finishes later lists them again. */
+export function clearDoneThreads(
+  state: UiState,
+  threadIds: readonly string[],
+  clearedAt: string,
+): UiState {
+  if (threadIds.length === 0 || !Number.isFinite(Date.parse(clearedAt))) return state;
+  const next = { ...state.threadDoneClearedAtById };
+  for (const threadId of threadIds) next[threadId] = clearedAt;
+  return { ...state, threadDoneClearedAtById: next };
+}
+
+/** Puts back the cleared times Undo saved; undefined removes the thread's mark. */
+export function restoreDoneCleared(
+  state: UiState,
+  previous: Readonly<Record<string, string | undefined>>,
+): UiState {
+  const next = { ...state.threadDoneClearedAtById };
+  for (const [threadId, clearedAt] of Object.entries(previous)) {
+    if (clearedAt === undefined) delete next[threadId];
+    else next[threadId] = clearedAt;
+  }
+  return { ...state, threadDoneClearedAtById: next };
+}
+
+/** A store that has never kept finished threads under Done starts now. */
+function withDoneReviewStart(state: UiState): UiState {
+  return state.doneReviewSince === null
+    ? { ...state, doneReviewSince: new Date().toISOString() }
+    : state;
 }
 
 function setThreadChangedFilesExpanded(
@@ -425,6 +480,8 @@ export function reorderProjects(
 interface UiStateStore extends UiState {
   markThreadVisited: (threadId: string, visitedAt: string) => void;
   markThreadUnread: (threadId: string, latestTurnCompletedAt: string | null | undefined) => void;
+  clearDoneThreads: (threadIds: readonly string[], clearedAt: string) => void;
+  restoreDoneCleared: (previous: Readonly<Record<string, string | undefined>>) => void;
   setThreadChangedFilesExpanded: (threadId: string, turnId: string, expanded: boolean) => void;
   setDefaultAdvertisedEndpointKey: (key: string | null) => void;
   setSidebarProjectScopeKeys: (projectKeys: readonly string[]) => void;
@@ -438,11 +495,14 @@ interface UiStateStore extends UiState {
 }
 
 export const useUiStateStore = create<UiStateStore>((set) => ({
-  ...readPersistedState(),
+  ...withDoneReviewStart(readPersistedState()),
   markThreadVisited: (threadId, visitedAt) =>
     set((state) => markThreadVisited(state, threadId, visitedAt)),
   markThreadUnread: (threadId, latestTurnCompletedAt) =>
     set((state) => markThreadUnread(state, threadId, latestTurnCompletedAt)),
+  clearDoneThreads: (threadIds, clearedAt) =>
+    set((state) => clearDoneThreads(state, threadIds, clearedAt)),
+  restoreDoneCleared: (previous) => set((state) => restoreDoneCleared(state, previous)),
   setThreadChangedFilesExpanded: (threadId, turnId, expanded) =>
     set((state) => setThreadChangedFilesExpanded(state, threadId, turnId, expanded)),
   setDefaultAdvertisedEndpointKey: (key) =>
@@ -459,6 +519,9 @@ export const useUiStateStore = create<UiStateStore>((set) => ({
 }));
 
 useUiStateStore.subscribe((state) => debouncedPersistState.maybeExecute(state));
+// The first load sets when Done began keeping finished threads; save it now so a reload
+// before any other change keeps the same start.
+if (!readPersistedState().doneReviewSince) persistState(useUiStateStore.getState());
 
 if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
   window.addEventListener("beforeunload", () => {

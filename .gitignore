@@ -51,3 +51,6 @@ node_modules/
 .pnpm-store/
 
 /packages/ssh/.ssh-launcher-test-*/
+
+# T3 Zip: this machine's settings (see scripts/t3zip.local.env.example).
+scripts/t3zip.local.env

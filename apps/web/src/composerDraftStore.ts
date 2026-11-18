@@ -4673,10 +4673,16 @@ export function useComposerThreadDraft(threadRef: ComposerThreadTarget): Compose
   });
 }
 
+/** Whether a sent thread has text or attachments typed in its composer and not sent yet. */
+export function threadHasUnsentDraft(
+  state: Pick<ComposerDraftStoreState, "draftsByThreadKey" | "draftThreadsByThreadKey">,
+  threadRef: ScopedThreadRef,
+): boolean {
+  return composerDraftHasUserContent(getComposerDraftState(state, threadRef));
+}
+
 export function useThreadHasUnsentDraft(threadRef: ScopedThreadRef): boolean {
-  return useComposerDraftStore((state) =>
-    composerDraftHasUserContent(getComposerDraftState(state, threadRef)),
-  );
+  return useComposerDraftStore((state) => threadHasUnsentDraft(state, threadRef));
 }
 
 export function useComposerDraftModelState(

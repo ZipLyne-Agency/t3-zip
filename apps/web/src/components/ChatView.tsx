@@ -304,6 +304,8 @@ import { ProviderSubagentBar } from "./chat/ProviderSubagentBar";
 import { getTriggerDisplayModelName } from "./chat/providerIconUtils";
 import { resolveScrollToEndClearance } from "./composerFooterLayout";
 import { ChatHeader } from "./chat/ChatHeader";
+import { ThreadTabsHost } from "./tabs/ThreadTabsHost";
+import { useThreadMuteStatusLine } from "./tabs/ThreadMuteMenu";
 import { useSideChat } from "./chat/useSideChat";
 import { useRemoteOpenState } from "~/remoteOpen";
 import { shouldShowOpenInPicker } from "./chat/OpenInPicker.logic";
@@ -3177,12 +3179,14 @@ export default function ChatView(props: ChatViewProps) {
     ]
       .filter((part) => part !== null)
       .join(" · ") || null;
+  const muteStatusLine = useThreadMuteStatusLine(isServerThread ? activeThreadRef : null);
   // The end of the timeline holds the thread's present and next turns: what it is doing now,
   // its lifecycle status, guest messages awaiting you, then your queued messages.
   const timelineFooter =
     pendingHandoff === null &&
     !hasThreadNow &&
     threadStatusLine === null &&
+    muteStatusLine === null &&
     pendingGuestMessageCount === 0 &&
     !hasQueuedTurns ? null : (
       <>
@@ -3204,6 +3208,7 @@ export default function ChatView(props: ChatViewProps) {
           goal={goalNow}
         />
         {threadStatusLine}
+        {muteStatusLine}
         {pendingGuestMessageCount > 0 && isServerThread && activeThread ? (
           <GuestPendingMessages
             threadRef={scopeThreadRef(activeThread.environmentId, activeThread.id)}
@@ -3424,6 +3429,14 @@ export default function ChatView(props: ChatViewProps) {
               {...(threadFindEnabled ? { onFindInThread: openThreadFindStable } : {})}
             />
           </header>
+        )}
+        {embedded ? null : (
+          <ThreadTabsHost
+            project={activeThread}
+            routeThreadRef={routeThreadRef}
+            routeDraftId={draftId}
+            onNewThread={handleNewThreadInActiveProjectStable}
+          />
         )}
 
         <div className="relative flex min-h-0 min-w-0 flex-1">

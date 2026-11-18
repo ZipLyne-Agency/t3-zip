@@ -15,6 +15,7 @@ import {
 import { primaryServerKeybindingsAtom } from "../../state/server";
 import { cn } from "../../lib/utils";
 import { useIssuesSupported, usePullRequestsSupported } from "../../state/environments";
+import { APP_DISPLAY_NAME } from "../../branding";
 import { T3Wordmark } from "../T3Wordmark";
 import {
   resolveEnvironmentIdentificationPillLabel,
@@ -171,7 +172,7 @@ function SidebarBrand({ onBackdrop }: { onBackdrop: boolean }) {
   const gt = useGT();
   return (
     <Link
-      aria-label={gt("T3 Code home")}
+      aria-label={gt("{app} home", { app: APP_DISPLAY_NAME })}
       className={cn(
         "relative z-10 ml-[var(--workspace-titlebar-content-left)] hidden h-7 w-fit min-w-0 shrink-0 items-center overflow-hidden rounded-md outline-hidden ring-ring focus-visible:ring-2 focus-visible:ring-inset md:flex",
         onBackdrop ? "text-white" : "text-foreground",
@@ -183,18 +184,26 @@ function SidebarBrand({ onBackdrop }: { onBackdrop: boolean }) {
   );
 }
 
+// "T3 Zip" draws the T3 wordmark and then "Zip"; a name without the T3 prefix shows in full.
+const BRAND_WORDMARK_PREFIX = "T3 ";
+const brandHasWordmark = APP_DISPLAY_NAME.startsWith(BRAND_WORDMARK_PREFIX);
+const brandSuffix = brandHasWordmark
+  ? APP_DISPLAY_NAME.slice(BRAND_WORDMARK_PREFIX.length)
+  : APP_DISPLAY_NAME;
+
 function SidebarBrandMark({ onBackdrop }: { onBackdrop: boolean }) {
   return (
     <span className="inline-flex min-w-0 items-baseline gap-1 text-sm font-medium tracking-tight">
-      <T3Wordmark aria-label="T3" className="h-[1cap] w-auto shrink-0" />
+      {brandHasWordmark ? (
+        <T3Wordmark aria-label="T3" className="h-[1cap] w-auto shrink-0" />
+      ) : null}
       <span
         className={cn(
           "truncate [text-box:trim-both_cap_alphabetic] supports-[text-box:trim-both_cap_alphabetic]:py-1",
           onBackdrop ? "text-white/70" : "text-muted-foreground",
         )}
       >
-        {/* oxlint-disable-next-line t3code/no-untranslated-copy -- product wordmark */}
-        {"Code"}
+        {brandSuffix}
       </span>
     </span>
   );

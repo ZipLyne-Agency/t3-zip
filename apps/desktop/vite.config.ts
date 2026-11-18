@@ -1,5 +1,7 @@
 import "vite-plus/test/config";
 import * as NodeOS from "node:os";
+// @effect-diagnostics-next-line nodeBuiltinImport:off -- the build bakes in this checkout's update script path.
+import * as NodePath from "node:path";
 
 import { defaultInclude, defineConfig } from "vite-plus";
 
@@ -21,6 +23,13 @@ const devElectronCommand =
     ? "node scripts/dev-electron.mjs"
     : "exec node scripts/dev-electron.mjs";
 const publicConfigDefine = {
+  // T3 Zip fork identity; see src/app/T3Zip.ts. Tests run without it.
+  __T3ZIP_BUILD__: JSON.stringify(process.env.T3ZIP_BUILD === "1"),
+  __T3ZIP_APP_ID__: JSON.stringify(process.env.T3ZIP_BUNDLE_ID?.trim() || "local.t3zip"),
+  // The update script of the checkout that built the app.
+  __T3ZIP_UPDATE_SCRIPT__: JSON.stringify(
+    NodePath.resolve(import.meta.dirname, "../../scripts/t3zip-update.sh"),
+  ),
   __T3CODE_BUILD_CLERK_PUBLISHABLE_KEY__: JSON.stringify(
     repoEnv.T3CODE_CLERK_PUBLISHABLE_KEY?.trim() ?? "",
   ),

@@ -1,0 +1,67 @@
+/*
+ * Project Rail depth. The rail and the thread column sit a step below the chat, like a tray
+ * the chat rests over: a slightly deeper fill, soft edges that fade out at the top and bottom,
+ * and a shadow the chat casts onto the tray's right edge. Kept apart from index.css so the
+ * nightly upstream merges never touch it.
+ */
+
+[data-project-rail] {
+  --rail-recess: color-mix(in oklab, var(--sidebar) 95%, black);
+  --rail-edge: color-mix(in oklab, var(--sidebar-border) 55%, transparent);
+  --rail-divider: color-mix(in oklab, var(--sidebar-border) 35%, transparent);
+  --rail-cast-shadow: rgb(0 0 0 / 0.1);
+}
+
+.dark [data-project-rail],
+[data-project-rail].dark {
+  --rail-recess: color-mix(in oklab, var(--sidebar) 84%, black);
+  --rail-cast-shadow: rgb(0 0 0 / 0.45);
+}
+
+[data-project-rail] [data-app-sidebar] [data-slot="sidebar-inner"],
+[data-project-rail] [data-thread-column] {
+  background-color: var(--rail-recess);
+}
+
+/* A hairline that fades out toward the top and bottom, in place of a full-height border. */
+[data-project-rail] [data-app-sidebar],
+[data-project-rail] [data-thread-column] {
+  border-right-color: transparent;
+}
+
+[data-project-rail] [data-app-sidebar]::after,
+[data-project-rail] [data-thread-column]::after {
+  content: "";
+  position: absolute;
+  inset-block: 0;
+  right: 0;
+  width: 1px;
+  pointer-events: none;
+  background: linear-gradient(
+    to bottom,
+    transparent,
+    var(--rail-line) 18%,
+    var(--rail-line) 82%,
+    transparent
+  );
+}
+
+/* Between the rail and the column the line is fainter; the tray's outer edge is the real one. */
+[data-project-rail] [data-app-sidebar] {
+  --rail-line: var(--rail-divider);
+}
+
+[data-project-rail] [data-thread-column] {
+  --rail-line: var(--rail-edge);
+  position: relative;
+  box-shadow: inset -18px 0 22px -22px var(--rail-cast-shadow);
+}
+
+/* With the column hidden the rail is the whole tray, so it takes the outer edge. */
+[data-project-rail]:not(:has([data-thread-column])) [data-app-sidebar] {
+  --rail-line: var(--rail-edge);
+}
+
+[data-project-rail]:not(:has([data-thread-column])) [data-app-sidebar] [data-slot="sidebar-inner"] {
+  box-shadow: inset -18px 0 22px -22px var(--rail-cast-shadow);
+}

@@ -450,6 +450,12 @@ export const SETTINGS_SEARCH_ITEMS = [
     to: "/settings/appearance",
   },
   {
+    id: "sidebar-layout",
+    title: msg("Sidebar layout"),
+    to: "/settings/general",
+    searchTerms: ["project rail classic sidebar folders threads list layout"],
+  },
+  {
     id: "project-grouping",
     title: msg("Project grouping"),
     to: "/settings/general",

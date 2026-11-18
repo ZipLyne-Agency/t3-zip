@@ -5,7 +5,9 @@ import {
   legacyProjectCwdPreferenceKey,
   markThreadUnread,
   markThreadVisited,
+  clearDoneThreads,
   parsePersistedState,
+  restoreDoneCleared,
   PERSISTED_STATE_KEY,
   type PersistedUiState,
   persistState,
@@ -21,6 +23,8 @@ function makeUiState(overrides: Partial<UiState> = {}): UiState {
     projectOrder: [],
     sidebarProjectScopeKeys: [],
     threadLastVisitedAtById: {},
+    threadDoneClearedAtById: {},
+    doneReviewSince: null,
     threadChangedFilesExpandedById: {},
     defaultAdvertisedEndpointKey: null,
     pullRequestMergeMethod: "merge",
@@ -94,6 +98,30 @@ describe("uiStateStore pure functions", () => {
   });
 });
 
+describe("clearDoneThreads", () => {
+  it("marks threads cleared and Undo puts back what was there", () => {
+    const state = makeUiState({
+      threadDoneClearedAtById: { "environment:a": "2026-02-25T10:00:00.000Z" },
+    });
+    const cleared = clearDoneThreads(
+      state,
+      ["environment:a", "environment:b"],
+      "2026-02-25T12:00:00.000Z",
+    );
+    expect(cleared.threadDoneClearedAtById).toEqual({
+      "environment:a": "2026-02-25T12:00:00.000Z",
+      "environment:b": "2026-02-25T12:00:00.000Z",
+    });
+    const restored = restoreDoneCleared(cleared, {
+      "environment:a": "2026-02-25T10:00:00.000Z",
+      "environment:b": undefined,
+    });
+    expect(restored.threadDoneClearedAtById).toEqual({
+      "environment:a": "2026-02-25T10:00:00.000Z",
+    });
+  });
+});
+
 describe("parsePersistedState", () => {
   it("hydrates raw UI-owned state without server entities", () => {
     const parsed = parsePersistedState({
@@ -106,6 +134,11 @@ describe("parsePersistedState", () => {
         "environment:thread-1": "2026-02-25T12:35:00.000Z",
         invalid: "not-a-date",
       },
+      threadDoneClearedAtById: {
+        "environment:thread-1": "2026-02-25T12:40:00.000Z",
+        invalid: "not-a-date",
+      },
+      doneReviewSince: "not-a-date",
       defaultAdvertisedEndpointKey: "desktop-core:lan:http",
       threadChangedFilesExpansionVersion: 2,
       threadChangedFilesExpandedById: {
@@ -124,6 +157,10 @@ describe("parsePersistedState", () => {
       threadLastVisitedAtById: {
         "environment:thread-1": "2026-02-25T12:35:00.000Z",
       },
+      threadDoneClearedAtById: {
+        "environment:thread-1": "2026-02-25T12:40:00.000Z",
+      },
+      doneReviewSince: null,
       defaultAdvertisedEndpointKey: "desktop-core:lan:http",
       sidebarProjectScopeKeys: [],
       pullRequestMergeMethod: "merge",
@@ -213,6 +250,10 @@ describe("uiStateStore persistence", () => {
       threadLastVisitedAtById: {
         "environment:thread-1": "2026-02-25T12:35:00.000Z",
       },
+      threadDoneClearedAtById: {
+        "environment:thread-1": "2026-02-25T12:40:00.000Z",
+      },
+      doneReviewSince: "2026-02-25T00:00:00.000Z",
       threadChangedFilesExpandedById: {
         "environment:thread-1": {
           "turn-1": false,
@@ -235,6 +276,10 @@ describe("uiStateStore persistence", () => {
       threadLastVisitedAtById: {
         "environment:thread-1": "2026-02-25T12:35:00.000Z",
       },
+      threadDoneClearedAtById: {
+        "environment:thread-1": "2026-02-25T12:40:00.000Z",
+      },
+      doneReviewSince: "2026-02-25T00:00:00.000Z",
       defaultAdvertisedEndpointKey: "desktop-core:lan:http",
       sidebarProjectScopeKeys: [],
       sidebarProjectScopeKey: null,

@@ -141,6 +141,12 @@ model picker is open. The thread jumps do not run while the model picker is open
 Those defaults use `isDesktop` so they do not steal the
 browser's tab-switch shortcuts. Remove that condition in Settings if you want
 the same jumps in a browser.
+With the **Project Rail** sidebar layout, these jumps and `thread.previous` /
+`thread.next` follow the thread tabs above the chat instead of the sidebar list.
+`thread.nextNeedsYou` (`mod+alt+j` by default) opens the next open thread that needs
+you, such as an approval or a question, moving through projects in rail order.
+`thread.nextDone` (`mod+alt+k` by default) opens the finished thread that has waited
+longest, in any project, so you can answer it and move on to the next.
 
 Combine keys with `!` for not, `&&` for and, `||` for or, and parentheses:
 

@@ -54,6 +54,9 @@ import * as Schema from "effect/Schema";
 import { formatComposerModelMention } from "@t3tools/client-runtime/composer-model-mentions";
 import { isPasteAsTextShortcut } from "@t3tools/client-runtime/text-paste";
 import { scopedThreadKey, scopeThreadRef } from "@t3tools/client-runtime/environment";
+import * as ThreadUndo from "@t3tools/client-runtime/state/thread-undo";
+import { useUiStateStore } from "../../uiStateStore";
+import { CLEAR_UNDO_KIND } from "../rail/useClearFromDone";
 import { serializeComposerFileLink } from "@t3tools/shared/composerTrigger";
 import { type FolderDropTarget, folderDropTarget, resolveDroppedFolderPath } from "./folderDrop";
 import { splitTransferredFiles } from "./workspaceFileDrop";
@@ -2246,6 +2249,13 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     });
     setComposerSubmissionError(submission.validationMessage);
     if (!submission.didDispatch) return false;
+    // Sending a message deals with what the thread finished, so it leaves Done; a run that
+    // finishes after this lists it there again.
+    if (activeThreadId) {
+      const threadKey = scopedThreadKey(scopeThreadRef(environmentId, activeThreadId));
+      useUiStateStore.getState().clearDoneThreads([threadKey], new Date().toISOString());
+      ThreadUndo.invalidate(CLEAR_UNDO_KIND, threadKey);
+    }
     onTypingGuardSend();
     if (shouldBlurMobileComposerOnSubmit()) {
       blurMobileComposerAfterSend();

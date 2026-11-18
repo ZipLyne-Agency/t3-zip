@@ -20,8 +20,6 @@ import {
   getDesktopUpdateActionError,
   getDesktopUpdateButtonTooltip,
   getDesktopUpdateDownloadedVersion,
-  getDesktopUpdateIdleTooltip,
-  getDesktopUpdateInstallConfirmationMessage,
   isDesktopUpdateButtonDisabled,
   resolveDesktopUpdateButtonAction,
   shouldShowArm64IntelBuildWarning,
@@ -40,6 +38,9 @@ import {
   shouldShowDesktopUpdateCheckIcon,
 } from "./DesktopUpdateStatusIcon";
 import { SidebarUpdateReleaseNotes } from "./SidebarUpdateReleaseNotes";
+import { installConfirmationMessage, restartContinuation, updateIdleTooltip } from "../t3ZipUpdate";
+import { appAtomRegistry } from "../../rpc/atomRegistry";
+import { primaryServerSettingsAtom } from "../../state/server";
 import { SidebarUpdateCapsule } from "./SidebarUpdateCapsule";
 import { UpdateEverythingDialog } from "./UpdateEverythingDialog";
 import type { UpdateEverythingRun, UpdateRunLocalState } from "./updateEverything.logic";
@@ -256,9 +257,7 @@ function SidebarUpdateControl() {
     showCheckIcon,
   });
   const idleTooltip =
-    !showUpdateDetails && !showCheckIcon
-      ? getDesktopUpdateIdleTooltip(state, updatesDenial, messages)
-      : null;
+    !showUpdateDetails && !showCheckIcon ? updateIdleTooltip(state, updatesDenial, messages) : null;
   const tooltip = runsEverything
     ? everything.summary
     : showUpdateDetails
@@ -315,8 +314,13 @@ function SidebarUpdateControl() {
       let confirmed = false;
       try {
         confirmed = await ensureLocalApi().dialogs.confirm(
-          getDesktopUpdateInstallConfirmationMessage(state),
-          { initialFocus: "confirm" },
+          installConfirmationMessage(
+            state,
+            restartContinuation(appAtomRegistry.get(primaryServerSettingsAtom)),
+          ),
+          {
+            initialFocus: "confirm",
+          },
         );
       } catch (error) {
         setIsActionPending(false);

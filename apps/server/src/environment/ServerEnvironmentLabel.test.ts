@@ -101,3 +101,18 @@ it.effect("qualifies the inherited Windows hostname only inside WSL", () =>
     }
   }),
 );
+
+it.effect("names the app after the machine when a label suffix is set", () =>
+  Effect.gen(function* () {
+    const label = yield* resolveServerEnvironmentLabel({ cwdBaseName: "project" }).pipe(
+      Effect.provideService(HostProcess.Platform, "win32"),
+      Effect.provideService(HostProcess.Hostname, "studio"),
+      Effect.provideService(HostProcess.Environment, {
+        T3CODE_ENVIRONMENT_LABEL_SUFFIX: " T3 Zip ",
+      }),
+      Effect.provide(Layer.mergeAll(FileSystem.layerNoop({}), ProcessRunner.layer)),
+      Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, neverExits),
+    );
+    assert.equal(label, "studio (T3 Zip)");
+  }),
+);

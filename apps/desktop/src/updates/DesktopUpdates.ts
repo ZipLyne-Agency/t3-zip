@@ -58,6 +58,7 @@ import {
   reduceDesktopUpdateStateOnUpdateAvailable,
   resolveNotAppliedInstallVersion,
 } from "./updateMachine.ts";
+import { T3_ZIP, T3_ZIP_UPDATES_DISABLED_REASON } from "../app/T3Zip.ts";
 
 const CHANNEL_CHANGE_RETRY_DELAY = Duration.seconds(1);
 const CHANNEL_CHANGE_RETRIES = 30;
@@ -350,6 +351,7 @@ function getAutoUpdateDisabledReason(args: {
   disabledByEnv: boolean;
   hasUpdateFeedConfig: boolean;
 }): string | null {
+  if (T3_ZIP) return T3_ZIP_UPDATES_DISABLED_REASON;
   if (args.policy.mode === "off") {
     return args.policy.message ?? "Updates are turned off on this machine.";
   }

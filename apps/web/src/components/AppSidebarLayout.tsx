@@ -40,7 +40,14 @@ import {
 } from "../panelAnimations";
 import { BackgroundThreadAnnouncer } from "./BackgroundThreadAnnouncer";
 import { HistorySwipeNavigation } from "./HistorySwipeNavigation";
-import ThreadSidebar from "./Sidebar";
+import {
+  AppSidebarBody,
+  PROJECT_RAIL_PROVIDER_STYLE,
+  useProjectRailLayout,
+} from "./rail/AppSidebarBody";
+import { useProjectRailStore } from "./rail/railStore";
+import { ThreadColumn } from "./rail/ThreadColumn";
+import { THREAD_COLUMN_WIDTH, threadColumnFits } from "./rail/threadColumn.logic";
 import { SidebarBrandWidthProbe } from "./sidebar/SidebarChrome";
 import { isAppModalPage } from "./sidebar/mainAppLocation";
 import type { SidebarRouteReveal } from "./sidebar/routeReveal";
@@ -433,12 +440,25 @@ export function AppSidebarLayout({
   const panelAnimationsSuppressed = usePanelNavigationSuppression(pathname);
   const routePanelAnimationsActive = panelAnimationsActive && !panelAnimationsSuppressed;
   const isMacosDesktop = isElectron && isMacPlatform(navigator.platform);
+  const projectRail = useProjectRailLayout();
   const [sidebarWidth, setSidebarWidth] = useState(readInitialThreadSidebarWidth);
   // A clamped drag may not change width, so viewport changes need a separate subscription.
   const viewportWidth = useSyncExternalStore(subscribeToViewportWidth, readViewportWidth);
   const [brandWidth, setBrandWidth] = useState(0);
+  const threadColumnOpen = useProjectRailStore((store) => store.threadColumnOpen);
+  // The thread column beside the open rail takes its width from what the rail may grow into.
+  const threadColumnReserve =
+    projectRail && showSidebar && threadColumnOpen && threadColumnFits(viewportWidth, false)
+      ? THREAD_COLUMN_WIDTH
+      : 0;
+  // Folded, the rail is narrower, so the column fits in a narrower window.
+  const threadColumnBesideFoldedRail =
+    projectRail && showSidebar && threadColumnOpen && threadColumnFits(viewportWidth, true);
   const sidebarMinimumWidth = resolveThreadSidebarMinimumWidth(brandWidth);
-  const sidebarMaximumWidth = resolveThreadSidebarMaximumWidth(viewportWidth, sidebarMinimumWidth);
+  const sidebarMaximumWidth = resolveThreadSidebarMaximumWidth(
+    viewportWidth - threadColumnReserve,
+    sidebarMinimumWidth,
+  );
   const resetSidebarWidth = () => {
     try {
       removeLocalStorageItem(THREAD_SIDEBAR_WIDTH_STORAGE_KEY);
@@ -460,13 +480,34 @@ export function AppSidebarLayout({
     "--sidebar-width": `${clampThreadSidebarWidth(sidebarWidth, sidebarMinimumWidth, sidebarMaximumWidth)}px`,
     "--panel-animation-duration": `${panelAnimationDurationMs}ms`,
     ...windowControlsInsetStyle,
+    ...(projectRail ? PROJECT_RAIL_PROVIDER_STYLE : {}),
+    // With the column beside the folded rail, the column's header clears the window controls,
+    // so the page headers keep their usual gutter. Open, the rail's brand keeps the classic inset.
+    ...(threadColumnBesideFoldedRail
+      ? {
+          "--workspace-titlebar-content-left":
+            "var(--thread-column-content-left, calc(var(--workspace-controls-left) + var(--workspace-titlebar-control-size) + var(--workspace-titlebar-control-gap)))",
+        }
+      : {}),
   } as CSSProperties;
 
   return (
     <PanelAnimationSuppressionProvider value={panelAnimationsSuppressed}>
       <SidebarProvider
-        className="h-dvh! min-h-0!"
+        className={
+          projectRail
+            ? // The folded rail is 64px wide, so page headers pad only past it while folded.
+              cn(
+                // The thread column's header clears the window controls while the rail is folded.
+                "[--thread-column-header-left:0.75rem] data-[sidebar-state=collapsed]:[--thread-column-header-left:max(0.75rem,var(--rail-titlebar-content-left))]",
+                "h-dvh! min-h-0! data-[sidebar-state=collapsed]:[--rail-titlebar-content-left:max(var(--workspace-gutter-start,0px),calc(var(--workspace-controls-left)_+_var(--workspace-titlebar-control-size)_+_var(--workspace-titlebar-control-gap)_-_var(--sidebar-width-icon)))]",
+                threadColumnBesideFoldedRail &&
+                  "data-[sidebar-state=collapsed]:[--thread-column-content-left:var(--workspace-gutter-start,0px)]",
+              )
+            : "h-dvh! min-h-0!"
+        }
         data-panel-animations={routePanelAnimationsActive ? "true" : "false"}
+        {...(projectRail ? { "data-project-rail": "" } : {})}
         storageKey="chat_thread_sidebar_open"
         style={sidebarProviderStyle}
       >
@@ -475,7 +516,7 @@ export function AppSidebarLayout({
             <SidebarBrandWidthProbe isElectron={isElectron} onWidthChange={setBrandWidth} />
             <Sidebar
               side="left"
-              collapsible="offcanvas"
+              collapsible={projectRail ? "icon" : "offcanvas"}
               data-app-sidebar=""
               {...sidebarArea}
               role="navigation"
@@ -485,20 +526,23 @@ export function AppSidebarLayout({
                 minWidth: sidebarMinimumWidth,
                 shouldAcceptWidth: ({ currentWidth, nextWidth, wrapper }) =>
                   nextWidth <= currentWidth ||
-                  wrapper.clientWidth - nextWidth >= THREAD_MAIN_CONTENT_MIN_WIDTH,
+                  wrapper.clientWidth - nextWidth - threadColumnReserve >=
+                    THREAD_MAIN_CONTENT_MIN_WIDTH,
                 storageKey: THREAD_SIDEBAR_WIDTH_STORAGE_KEY,
                 onResize: setSidebarWidth,
               }}
               style={windowControlsInsetStyle}
             >
-              <ThreadSidebar routeReveal={sidebarRouteReveal} />
+              <AppSidebarBody routeReveal={sidebarRouteReveal} />
               <SidebarRail onDoubleClick={resetSidebarWidth} />
             </Sidebar>
+            {projectRail ? <ThreadColumn /> : null}
           </>
         ) : null}
         {children}
         <BackgroundThreadAnnouncer />
         <SidebarControl showSidebar={showSidebar} />
+        {/* Outside the sidebar, so it stays in the corner when the rail is folded. */}
         {isElectron ? <HistorySwipeNavigation /> : null}
       </SidebarProvider>
     </PanelAnimationSuppressionProvider>

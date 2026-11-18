@@ -40,6 +40,8 @@ it("shows the titled preview inside and outside search results from a collapsed 
   using _environment = installFakeEnvironment([first, second]);
   __setClientSettingsForTests({
     ...DEFAULT_CLIENT_SETTINGS,
+    // These cover the classic thread list; the project rail is the default layout.
+    sidebarLayout: "classic",
     boringSidebarEnabled: true,
     onboardingCompletedAt: "2026-01-01T00:00:00.000Z",
   });

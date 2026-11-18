@@ -5,7 +5,11 @@ import {
   scopeThreadRef,
   scopedThreadKey,
 } from "@t3tools/client-runtime/environment";
-import { settlePromise, squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
+import {
+  type AtomCommandResult,
+  settlePromise,
+  squashAtomCommandFailure,
+} from "@t3tools/client-runtime/state/runtime";
 import { canSnooze, threadWokeAt } from "@t3tools/client-runtime/state/thread-settled";
 import { threadRuntimeCanArchive } from "@t3tools/client-runtime/state/models";
 import {
@@ -61,6 +65,7 @@ import { stackedThreadToast, toastManager } from "../components/ui/toast";
 import { useClientSettings } from "./useSettings";
 import * as ThreadUndo from "@t3tools/client-runtime/state/thread-undo";
 import { showThreadUndoNotice } from "./showThreadUndoNotice";
+import { muteUndoInput } from "../components/tabs/threadMute.logic";
 import { useAtomCommand } from "../state/use-atom-command";
 import { useOrchestrationCommand } from "../state/use-orchestration-command";
 import { useAtomQueryRunner } from "../state/use-atom-query-runner";
@@ -226,36 +231,41 @@ export async function navigateAfterThreadDeletion(navigate: () => Promise<void>)
   }
 }
 
-function useMarkThreadUnread() {
+export function useMarkThreadUnread() {
   const markThreadUnreadMutation = useAtomCommand(threadEnvironment.markUnread, {
     reportFailure: false,
   });
   const markThreadUnreadLocal = useUiStateStore((state) => state.markThreadUnread);
-  return (target: ScopedThreadRef) => {
+  /** Resolves once the server has the change, for callers that order it after another. */
+  return (target: ScopedThreadRef): Promise<AtomCommandResult<unknown, unknown>> => {
     if (readEnvironmentServerConfigLoaded(target.environmentId)) {
-      void markThreadUnreadMutation({
+      return markThreadUnreadMutation({
         environmentId: target.environmentId,
         input: { threadId: target.threadId },
       });
-      return;
     }
     const thread = readThreadShell(target);
     markThreadUnreadLocal(scopedThreadKey(target), thread?.latestRun?.completedAt);
+    return Promise.resolve(AsyncResult.success(undefined));
   };
 }
 
 export function useAcknowledgeThreadWoke() {
   const visitThreadMutation = useAtomCommand(threadEnvironment.visit, { reportFailure: false });
   const markThreadVisited = useUiStateStore((state) => state.markThreadVisited);
-  return (target: ScopedThreadRef, wokeAt: string) => {
+  /** Resolves once the server has the visit, for callers that order it after another. */
+  return (
+    target: ScopedThreadRef,
+    wokeAt: string,
+  ): Promise<AtomCommandResult<unknown, unknown>> => {
     if (readEnvironmentServerConfigLoaded(target.environmentId)) {
-      void visitThreadMutation({
+      return visitThreadMutation({
         environmentId: target.environmentId,
         input: { threadId: target.threadId, visitedAt: wokeAt },
       });
-      return;
     }
     markThreadVisited(scopedThreadKey(target), wokeAt);
+    return Promise.resolve(AsyncResult.success(undefined));
   };
 }
 
@@ -323,6 +333,9 @@ export function useThreadActions() {
     reportFailure: false,
   });
   const setThreadAutoSettleMutation = useOrchestrationCommand(threadEnvironment.setAutoSettle, {
+    reportFailure: false,
+  });
+  const setThreadMutedMutation = useOrchestrationCommand(threadEnvironment.setMuted, {
     reportFailure: false,
   });
   const reorderPinnedThreadMutation = useOrchestrationCommand(threadEnvironment.reorderPin, {
@@ -838,7 +851,52 @@ export function useThreadActions() {
     return result;
   };
 
-  const settleThread = async (target: ScopedThreadRef) => {
+  /**
+   * `mutedUntil` ends the mute on its own; omit it to mute until unmuted. Every mute, unmute
+   * and time change offers Undo, which puts back the mute the thread had before. Pass
+   * `{ undo: false }` when the caller shows its own undo, such as a bulk unmute.
+   */
+  const setThreadMuted = async (
+    target: ScopedThreadRef,
+    muted: boolean,
+    mutedUntil?: string,
+    options: { readonly undo?: boolean } = {},
+  ) => {
+    const sendMute = (input: { readonly muted: boolean; readonly mutedUntil?: string }) =>
+      setThreadMutedMutation({
+        environmentId: target.environmentId,
+        input: {
+          threadId: target.threadId,
+          muted: input.muted,
+          ...(input.muted && input.mutedUntil !== undefined
+            ? { mutedUntil: input.mutedUntil }
+            : {}),
+        },
+      });
+    const before = readThreadShell(target);
+    const action = ThreadUndo.begin("mute", scopedThreadKey(target));
+    const result = await sendMute({ muted, ...(mutedUntil !== undefined ? { mutedUntil } : {}) });
+    if (result._tag !== "Success" || options.undo === false) {
+      action.finish();
+      return result;
+    }
+    showThreadUndoNotice({
+      action: muted ? "Muted" : "Unmuted",
+      claim: action,
+      undo: () => sendMute(muteUndoInput(before, Date.now())),
+      failureTitle: muted ? m(msg("Failed to undo mute")) : m(msg("Failed to undo unmute")),
+    });
+    return result;
+  };
+
+  /**
+   * `onUndone` runs after Undo restores the thread, so a closed tab can reopen it. When one
+   * Undo restores several settled threads, only the newest settle's `onUndone` runs.
+   */
+  const settleThread = async (
+    target: ScopedThreadRef,
+    options?: { readonly onUndone?: () => void },
+  ) => {
     if (!readEnvironmentServerConfigLoaded(target.environmentId)) {
       return AsyncResult.failure(
         Cause.fail(
@@ -874,6 +932,7 @@ export function useThreadActions() {
       action: "Settled",
       claim: action,
       undo: () => runUndoPlan(target, undoPlan),
+      ...(options?.onUndone ? { restored: options.onUndone } : {}),
       failureTitle: m(msg("Failed to undo settle")),
     });
     return result;
@@ -1061,6 +1120,7 @@ export function useThreadActions() {
     reorderActiveThread,
     markThreadUnread,
     setThreadAutoSettle,
+    setThreadMuted,
     turnThreadIntoProject: (target: ScopedThreadRef) =>
       createProjectFromThread({
         environmentId: target.environmentId,

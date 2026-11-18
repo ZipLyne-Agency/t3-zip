@@ -192,7 +192,7 @@ const isWsl = Effect.fn("isWsl")(function* () {
   return kernelRelease.toLowerCase().includes("microsoft");
 });
 
-export const resolveServerEnvironmentLabel = Effect.fn("resolveServerEnvironmentLabel")(function* (
+const resolveMachineLabel = Effect.fn("resolveMachineLabel")(function* (
   input: ResolveServerEnvironmentLabelInput,
 ) {
   const friendlyHostLabel = yield* resolveFriendlyHostLabel();
@@ -211,4 +211,18 @@ export const resolveServerEnvironmentLabel = Effect.fn("resolveServerEnvironment
   }
 
   return normalizeLabel(input.cwdBaseName) ?? "T3 environment";
+});
+
+/**
+ * Names the app when two servers share a machine, such as a fork running beside T3 Code, so
+ * clients listing both can tell them apart: "Sam's MacBook Pro (T3 Zip)".
+ */
+const ENVIRONMENT_LABEL_SUFFIX_ENV = "T3CODE_ENVIRONMENT_LABEL_SUFFIX";
+
+export const resolveServerEnvironmentLabel = Effect.fn("resolveServerEnvironmentLabel")(function* (
+  input: ResolveServerEnvironmentLabelInput,
+) {
+  const label = yield* resolveMachineLabel(input);
+  const suffix = normalizeLabel((yield* HostProcess.Environment)[ENVIRONMENT_LABEL_SUFFIX_ENV]);
+  return suffix ? `${label} (${suffix})` : label;
 });
