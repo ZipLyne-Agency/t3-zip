@@ -1,3 +1,4 @@
+import { isThreadMuted } from "@t3tools/shared/threadMute";
 import type { EnvironmentId } from "@t3tools/contracts";
 import { scopeThreadRef, scopedThreadKey } from "@t3tools/client-runtime/environment";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/models";
@@ -94,6 +95,8 @@ function buildRailProjects(input: {
   for (const shell of visible) {
     const configLoaded = input.configLoaded(shell.environmentId);
     if (isRailOpenThread(shell, { nowIso, configLoaded })) {
+      // A muted thread stays out of its project; the Muted shelf lists it.
+      if (isThreadMuted(shell, nowMs)) continue;
       const group = groupByMember.get(`${shell.environmentId}:${shell.projectId}`);
       if (group === undefined) continue;
       const thread = {

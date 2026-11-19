@@ -12,6 +12,7 @@ import {
   type RailWaitingReason,
 } from "./railQueue.logic";
 import { resolveDoneSection } from "./railStatus.logic";
+import { useSnoozedProjectKeys } from "./useProjectSnooze";
 
 export type RailQueueItem = RailQueueEntry<ThreadTabEntry["thread"]> & {
   readonly tab: ThreadTabEntry;
@@ -20,7 +21,7 @@ export type RailQueueItem = RailQueueEntry<ThreadTabEntry["thread"]> & {
 export interface RailQueue {
   /** Needs you or failed, oldest first. */
   readonly waiting: readonly RailQueueItem[];
-  /** Running now, longest-running first. */
+  /** Running now, the latest started first. */
   readonly working: readonly RailQueueItem[];
   /** Finished and not cleared, oldest first; opened ones are marked. */
   readonly done: readonly RailQueueItem[];
@@ -53,6 +54,8 @@ export function buildRailQueue(source: ThreadTabsSource, clears?: RailDoneClears
     done: [],
   };
   for (const tab of buildThreadTabEntries(source, null).tabs) {
+    // Muted threads stay off the lists; the Muted shelf lists them.
+    if (tab.mute !== null) continue;
     // Without clears, Done is only what you have not opened, as the next-Done shortcut wants.
     const section =
       clears === undefined
@@ -84,14 +87,24 @@ export function buildRailQueue(source: ThreadTabsSource, clears?: RailDoneClears
   }
   return {
     waiting: sortRailQueue(lists.waiting),
-    working: sortRailQueue(lists.working),
+    working: sortRailQueue(lists.working).toReversed(),
     done: sortRailQueue(lists.done),
     nowMs: source.nowMs,
   };
 }
 
+/** The rail's lists, without the threads of projects snoozed right now. */
 export function useRailQueue(): RailQueue {
   const clearedAtById = useUiStateStore((state) => state.threadDoneClearedAtById);
   const reviewSince = useUiStateStore((state) => state.doneReviewSince);
-  return buildRailQueue(useThreadTabsSource(), { clearedAtById, reviewSince });
+  const snoozed = useSnoozedProjectKeys();
+  const queue = buildRailQueue(useThreadTabsSource(), { clearedAtById, reviewSince });
+  if (snoozed.size === 0) return queue;
+  const awake = (item: RailQueueItem) => item.projectKey === null || !snoozed.has(item.projectKey);
+  return {
+    waiting: queue.waiting.filter(awake),
+    working: queue.working.filter(awake),
+    done: queue.done.filter(awake),
+    nowMs: queue.nowMs,
+  };
 }

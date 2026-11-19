@@ -5,6 +5,7 @@ import {
   buildThreadColumnSections,
   countThreadColumnFilters,
   groupThreadColumnItemsByProject,
+  nextThreadAfterRemoval,
   resolveThreadColumnScope,
   threadColumnFits,
   type ThreadColumnItem,
@@ -125,6 +126,16 @@ describe("buildThreadColumnSections", () => {
     ]);
   });
 
+  it("puts the latest started run on top of Working", () => {
+    const runs = [
+      item("first", { status: "working", sinceMs: NOW - 3 * HOUR }),
+      item("latest", { status: "working", sinceMs: NOW - HOUR }),
+    ];
+    expect(ids(buildThreadColumnSections(runs, "working", NOW))).toEqual([
+      ["working", ["latest", "first"]],
+    ]);
+  });
+
   it("keeps only the filter's threads, with drafts on top", () => {
     expect(ids(buildThreadColumnSections(items, "waiting", NOW))).toEqual([
       ["drafts", ["draft"]],
@@ -165,5 +176,26 @@ describe("groupThreadColumnItemsByProject", () => {
       ["b", ["1", "3"]],
       ["a", ["2"]],
     ]);
+  });
+});
+
+describe("nextThreadAfterRemoval", () => {
+  const listed = ["a", "b", "c", "d"].map((key) => ({ key }));
+  const next = (removed: string[], open: string | null) =>
+    nextThreadAfterRemoval(listed, new Set(removed), open)?.key ?? null;
+
+  it("moves to the next thread below that stays", () => {
+    expect(next(["b"], "b")).toBe("c");
+    expect(next(["b", "c"], "b")).toBe("d");
+  });
+
+  it("falls back to the nearest thread above at the end of the list", () => {
+    expect(next(["c", "d"], "d")).toBe("b");
+  });
+
+  it("stays put when the open thread is not removed, or nothing is left", () => {
+    expect(next(["a"], "b")).toBeNull();
+    expect(next(["a", "b", "c", "d"], "b")).toBeNull();
+    expect(next(["b"], null)).toBeNull();
   });
 });

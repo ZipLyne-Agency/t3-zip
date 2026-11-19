@@ -59,11 +59,13 @@ import {
   buildThreadColumnSections,
   countThreadColumnFilters,
   groupThreadColumnItemsByProject,
+  nextThreadAfterRemoval,
   THREAD_COLUMN_WIDTH,
   threadColumnAge,
   type ThreadColumnItem,
 } from "./threadColumn.logic";
 import { useClearFromDone } from "./useClearFromDone";
+import { useSnoozedProjectKeys } from "./useProjectSnooze";
 import { useThreadColumnScope, useThreadColumnShown } from "./useThreadColumn";
 import "./projectRailDepth.css";
 
@@ -463,6 +465,7 @@ function ThreadColumnPanel() {
   const clearedAtById = useUiStateStore((state) => state.threadDoneClearedAtById);
   const doneReviewSince = useUiStateStore((state) => state.doneReviewSince);
   const clearFromDone = useClearFromDone();
+  const snoozedProjectKeys = useSnoozedProjectKeys();
   // Opening a Done thread from the column marks it seen, which would drop it from Done under
   // the cursor. The opened thread keeps the place it was clicked in while it stays open.
   const [held, setHeld] = useState<{ readonly key: string; readonly status: OpenThreadStatus }>();
@@ -484,7 +487,23 @@ function ThreadColumnPanel() {
   for (const member of column.groups) {
     for (const key of groupMemberKeys(member)) groupByMember.set(key, member);
   }
-  const threadTabs = buildThreadTabEntries(source, allScope ? null : memberKeys, resolve).tabs;
+  // Muted threads stay off the column; the Muted shelf lists them. All Projects also leaves out
+  // snoozed projects until they wake.
+  const threadTabs = buildThreadTabEntries(
+    source,
+    allScope ? null : memberKeys,
+    resolve,
+  ).tabs.filter(
+    (tab) =>
+      tab.mute === null &&
+      !(
+        allScope &&
+        snoozedProjectKeys.has(
+          groupByMember.get(`${tab.thread.environmentId}:${tab.thread.projectId}`)?.projectKey ??
+            "",
+        )
+      ),
+  );
   const drafts = useDraftTabs(memberKeys, column.routeDraftId);
   // As in the sidebar and the tabs, the open thread does not flag its own draft.
   const draftedKeys = new Set(
@@ -583,19 +602,25 @@ function ThreadColumnPanel() {
     void openTab(entry.tab);
   };
 
+  // The list top to bottom as it shows: every project splits each section by project.
+  const shownOrder = () =>
+    sections
+      .flatMap((section) =>
+        allScope && section.id !== "drafts"
+          ? groupThreadColumnItemsByProject(section.items).flatMap(
+              (projectGroup) => projectGroup.items,
+            )
+          : section.items,
+      )
+      .filter((item, index, all) => all.findIndex((other) => other.key === item.key) === index);
+
   const settle = (entry: ColumnEntry) => {
     if (entry.tab.kind !== "thread") return;
     const tab = entry.tab;
     const wasOpen = entry.key === column.routeKey;
-    if (wasOpen) {
-      // Move to the next thread in the list, as closing a tab does.
-      const listed = sections
-        .flatMap((section) => section.items)
-        .filter((item, index, all) => all.findIndex((other) => other.key === item.key) === index);
-      const at = listed.findIndex((item) => item.key === entry.key);
-      const next = listed[at + 1] ?? listed[at - 1];
-      if (next) open(next);
-    }
+    // Move to the next thread in the list, as closing a tab does.
+    const next = nextThreadAfterRemoval(shownOrder(), new Set([entry.key]), column.routeKey);
+    if (next !== null) open(next);
     void settleThread(tab.ref, wasOpen ? { onUndone: () => void openTab(tab) } : undefined).then(
       (result) => reportThreadActionFailure(m(msg("Failed to settle thread")), result),
     );
@@ -604,6 +629,13 @@ function ThreadColumnPanel() {
   const clear = (cleared: readonly ColumnEntry[]) => {
     // A thread held in place after it was opened is let go, so clearing it takes effect now.
     if (held !== undefined && cleared.some((entry) => entry.key === held.key)) setHeld(undefined);
+    // Clearing the open thread moves on to the next one in the list, as Settle does.
+    const next = nextThreadAfterRemoval(
+      shownOrder(),
+      new Set(cleared.map((entry) => entry.key)),
+      column.routeKey,
+    );
+    if (next !== null) open(next);
     clearFromDone(
       cleared.flatMap((entry) =>
         // The thread's own read state, not the status a held row shows.

@@ -39,6 +39,9 @@ import { Button } from "../ui/button";
 import { Menu, MenuItem, MenuPopup, MenuTrigger } from "../ui/menu";
 import { SidebarContent, SidebarGroup, useSidebar } from "../ui/sidebar";
 import { stackedThreadToast, toastManager } from "../ui/toast";
+import { isIndefiniteSnooze } from "../indefiniteSnooze";
+import { useClientSettings } from "../../hooks/useSettings";
+import { useProjectSnoozeClock } from "./useProjectSnooze";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { RailCollapsed } from "./RailCollapsed";
 import {
@@ -50,7 +53,7 @@ import {
   type RailRowActions,
 } from "./RailRows";
 import { RailFilterBar, RailQueueList } from "./RailFilters";
-import { RailShelves } from "./RailShelves";
+import { RailShelves, untilLabel } from "./RailShelves";
 import { useRailThreadSearch } from "./RailThreadSearch";
 import {
   applyRailDrop,
@@ -84,7 +87,7 @@ import { useProjectRailStore } from "./railStore";
 import { railThreadKey, useRailModel, type RailProject } from "./useRailModel";
 import { useOpenTab, useThreadTabsSource } from "../tabs/useThreadTabs";
 import { firstColumnThread } from "./ThreadColumn";
-import { ALL_PROJECTS_SCOPE, threadColumnFits } from "./threadColumn.logic";
+import { ALL_PROJECTS_SCOPE, nextThreadAfterRemoval, threadColumnFits } from "./threadColumn.logic";
 import { useThreadColumnScope, useThreadColumnShown, useViewportWidth } from "./useThreadColumn";
 import { useClearFromDone } from "./useClearFromDone";
 import { useRailQueue, type RailQueueItem } from "./useRailQueue";
@@ -198,6 +201,11 @@ export function ProjectRail() {
   const noProjectPosition = useProjectRailStore((store) => store.noProjectPosition);
   const lastThreadByProject = useProjectRailStore((store) => store.lastThreadByProject);
   const hiddenProjects = useProjectRailStore((store) => store.hiddenProjects);
+  const snoozedProjects = useProjectRailStore((store) => store.snoozedProjects);
+  const { active: snoozedKeys, woken: wokenProjects } = useProjectSnoozeClock();
+  // One string, so the effect below runs when the set of woken projects changes.
+  const wokenKey = wokenProjects.join("\n");
+  const timestampFormat = useClientSettings((settings) => settings.timestampFormat);
   const shelvesCollapsed = useProjectRailStore((store) => store.shelvesCollapsed);
   const favoriteProjects = useProjectRailStore((store) => store.favoriteProjects);
   const favoritesOnly = useProjectRailStore((store) => store.favoritesOnly);
@@ -240,8 +248,15 @@ export function ProjectRail() {
   // With the thread column, the highlighted row is the list the column shows; without it, the
   // open thread's project, as before.
   const highlightKey = columnShown ? column.scope : selectedProjectKey;
-  const entries = buildRailEntries(layout, projectKeys, hiddenProjects);
+  // Snoozed projects leave the rail like hidden ones, and keep their place for when they wake.
+  const entries = buildRailEntries(layout, projectKeys, [...hiddenProjects, ...snoozedKeys]);
   const hiddenList = hiddenProjects.flatMap((key) => projects.get(key) ?? []);
+  const snoozedList = [...snoozedKeys].flatMap((key) => {
+    const project = projects.get(key);
+    const until = snoozedProjects[key];
+    return project && until ? [{ project, until }] : [];
+  });
+  const awakeProjectKeys = projectKeys.filter((key) => !snoozedKeys.has(key));
   const topIds = entries.map(entryId);
   const folderChoices = entries.flatMap((entry) =>
     entry.kind === "folder" ? [{ folderId: entry.folderId, name: entry.name }] : [],
@@ -261,6 +276,24 @@ export function ProjectRail() {
       rememberThread(selectedProjectKey, routeThreadKey);
     }
   }, [rememberThread, routeThreadKey, selectedProjectKey]);
+
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- a snooze that ran out (checked each minute) is removed, and the project's return is announced
+  useEffect(() => {
+    if (wokenKey === "") return;
+    const woken = wokenKey.split("\n");
+    useProjectRailStore.getState().wakeProjects(woken);
+    for (const key of woken) {
+      const name = projects.get(key)?.group.displayName;
+      if (name === undefined) continue;
+      toastManager.add(
+        stackedThreadToast({
+          type: "info",
+          title: m(msg("{name} is back", { name })),
+          description: m(msg("Its snooze ended, so it is in the sidebar again.")),
+        }),
+      );
+    }
+  }, [projects, wokenKey]);
 
   const change = (update: (layout: RailLayoutState) => RailLayoutState) =>
     updateLayout(projectKeys, update);
@@ -317,6 +350,21 @@ export function ProjectRail() {
   const openQueueItem = (item: RailQueueItem) => {
     if (item.projectKey !== null) useProjectRailStore.getState().revealProject(item.projectKey);
     void navigateToThread(item.tab.ref);
+  };
+
+  // Clearing the open thread from Done moves on to the next one, in the order Done shows them.
+  const clearQueueItems = (items: readonly RailQueueItem[]) => {
+    const shown = [
+      ...queue.done.filter((item) => !item.opened),
+      ...queue.done.filter((item) => item.opened),
+    ];
+    const next = nextThreadAfterRemoval(
+      shown,
+      new Set(items.map((item) => item.key)),
+      routeThreadKey,
+    );
+    clearFromDone(items.map((item) => ({ tab: item.tab, unread: !item.opened })));
+    if (next !== null) openQueueItem(next);
   };
 
   const newScratchThread = () => {
@@ -439,6 +487,25 @@ export function ProjectRail() {
           actionProps: {
             children: m(msg("Undo")),
             onClick: () => useProjectRailStore.getState().showProject(projectKey),
+          },
+        }),
+      );
+    },
+    snoozeProject: (projectKey, until) => {
+      const name = projects.get(projectKey)?.group.displayName ?? m(msg("Project"));
+      const previous = useProjectRailStore.getState().snoozedProjects[projectKey];
+      useProjectRailStore.getState().snoozeProject(projectKey, until);
+      toastManager.add(
+        stackedThreadToast({
+          type: "success",
+          title: m(msg("Snoozed {name}", { name })),
+          description: isIndefiniteSnooze(until)
+            ? m(msg("It stays under Snoozed until you wake it."))
+            : m(msg("Back at {time}.", { time: untilLabel(until, timestampFormat) })),
+          actionProps: {
+            children: m(msg("Undo")),
+            onClick: () =>
+              useProjectRailStore.getState().restoreProjectSnooze(projectKey, previous),
           },
         }),
       );
@@ -610,11 +677,11 @@ export function ProjectRail() {
     });
 
   const allCounts = addRailCounts(
-    folderCounts(projectKeys, projects),
+    folderCounts(awakeProjectKeys, projects),
     noProject?.counts ?? EMPTY_RAIL_COUNTS,
   );
   const allRunning =
-    projectKeys.reduce((sum, key) => sum + (projects.get(key)?.running ?? 0), 0) +
+    awakeProjectKeys.reduce((sum, key) => sum + (projects.get(key)?.running ?? 0), 0) +
     (noProject?.running ?? 0);
 
   const draggedLabel =
@@ -630,26 +697,67 @@ export function ProjectRail() {
       <SidebarContent
         className="min-h-full"
         fixedHeader={
-          <SidebarGroup className="z-[1]">
-            <SidebarThreadHeader
-              hasProjects={projectKeys.length > 0}
-              projectScope={null}
-              onNewProject={() => openCommandPalette({ open: "add-project" })}
-              onNewThread={newThreadFromHeader}
-              newThreadDisabled={projectKeys.length === 0 && !showNoProject}
-              newThreadShortcutLabel={newThreadShortcutLabel}
-              newThreadInProjectShortcutLabel={undefined}
-              showNewThreadInProjectHint={false}
-              searchInputRef={search.inputRef}
-              searchQuery={search.query}
-              onSearchQueryChange={search.setQuery}
-              onSearchKeyDown={search.onKeyDown}
-              isSearching={search.isSearching}
-              searchResultCount={search.resultCount}
-              activeSearchResultIndex={search.activeIndex}
-              onClearSearch={search.clear}
-            />
-          </SidebarGroup>
+          <>
+            <SidebarGroup className="z-[1]">
+              <SidebarThreadHeader
+                hasProjects={projectKeys.length > 0}
+                projectScope={null}
+                onNewProject={() => openCommandPalette({ open: "add-project" })}
+                onNewThread={newThreadFromHeader}
+                newThreadDisabled={projectKeys.length === 0 && !showNoProject}
+                newThreadShortcutLabel={newThreadShortcutLabel}
+                newThreadInProjectShortcutLabel={undefined}
+                showNewThreadInProjectHint={false}
+                searchInputRef={search.inputRef}
+                searchQuery={search.query}
+                onSearchQueryChange={search.setQuery}
+                onSearchKeyDown={search.onKeyDown}
+                isSearching={search.isSearching}
+                searchResultCount={search.resultCount}
+                activeSearchResultIndex={search.activeIndex}
+                onClearSearch={search.clear}
+              />
+            </SidebarGroup>
+            {/* No Project, All Projects and the Projects header stay put; the list scrolls below. */}
+            {noProjectPosition === "top" && !search.isSearching ? noProjectRow : null}
+            <div className={cn("px-(--sidebar-content-inset)", search.isSearching && "hidden")}>
+              {columnShown ? (
+                <div className="pt-2">
+                  <RailAllProjectsRow
+                    counts={allCounts}
+                    running={allRunning}
+                    detail={summarizeRailCounts(allCounts)}
+                    selected={highlightKey === ALL_PROJECTS_SCOPE}
+                    onOpen={() => column.choose(ALL_PROJECTS_SCOPE)}
+                  />
+                </div>
+              ) : (
+                <RailFilterBar
+                  filter={filter}
+                  onChange={setFilter}
+                  counts={{
+                    waiting: queue.waiting.length,
+                    working: queue.working.length,
+                    done: queue.done.length,
+                  }}
+                />
+              )}
+              {railFilter === "all" ? (
+                <ProjectsHeader
+                  onNewProject={() => openCommandPalette({ open: "add-project" })}
+                  onNewFolder={() => newFolder()}
+                  favoritesOnly={favoritesOnly}
+                  favoriteCount={favoriteRows.length}
+                  onFavoritesOnlyChange={setFavoritesOnly}
+                  onShowThreadList={
+                    !threadColumnOpen && threadColumnFits(viewportWidth, false)
+                      ? () => setThreadColumnOpen(true)
+                      : null
+                  }
+                />
+              ) : null}
+            </div>
+          </>
         }
       >
         {search.isSearching ? (
@@ -657,44 +765,6 @@ export function ProjectRail() {
             {search.resultsList}
           </SidebarGroup>
         ) : null}
-        {noProjectPosition === "top" && !search.isSearching ? noProjectRow : null}
-        <div className={cn("px-(--sidebar-content-inset)", search.isSearching && "hidden")}>
-          {columnShown ? (
-            <div className="pt-2">
-              <RailAllProjectsRow
-                counts={allCounts}
-                running={allRunning}
-                detail={summarizeRailCounts(allCounts)}
-                selected={highlightKey === ALL_PROJECTS_SCOPE}
-                onOpen={() => column.choose(ALL_PROJECTS_SCOPE)}
-              />
-            </div>
-          ) : (
-            <RailFilterBar
-              filter={filter}
-              onChange={setFilter}
-              counts={{
-                waiting: queue.waiting.length,
-                working: queue.working.length,
-                done: queue.done.length,
-              }}
-            />
-          )}
-          {railFilter === "all" ? (
-            <ProjectsHeader
-              onNewProject={() => openCommandPalette({ open: "add-project" })}
-              onNewFolder={() => newFolder()}
-              favoritesOnly={favoritesOnly}
-              favoriteCount={favoriteRows.length}
-              onFavoritesOnlyChange={setFavoritesOnly}
-              onShowThreadList={
-                !threadColumnOpen && threadColumnFits(viewportWidth, false)
-                  ? () => setThreadColumnOpen(true)
-                  : null
-              }
-            />
-          ) : null}
-        </div>
         {railFilter !== "all" ? (
           <div
             className={cn(
@@ -708,9 +778,7 @@ export function ProjectRail() {
               nowMs={queue.nowMs}
               activeKey={routeThreadKey}
               onOpen={openQueueItem}
-              onClear={(items) =>
-                clearFromDone(items.map((item) => ({ tab: item.tab, unread: !item.opened })))
-              }
+              onClear={clearQueueItems}
             />
           </div>
         ) : null}
@@ -781,6 +849,8 @@ export function ProjectRail() {
           onOpenThread={(threadRef) => void navigateToThread(threadRef)}
           hidden={hiddenList}
           onShowProject={showProject}
+          snoozedProjects={snoozedList}
+          onWakeProject={(projectKey) => useProjectRailStore.getState().wakeProjects([projectKey])}
           onOpenProject={(project) => actions.openProject(project.group.projectKey)}
           collapsed={shelvesCollapsed}
           onCollapsedChange={setShelvesCollapsed}

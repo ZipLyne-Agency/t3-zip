@@ -1,5 +1,6 @@
 import { useDraggable, useDroppable } from "@dnd-kit/core";
 import {
+  AlarmClockIcon,
   ArrowDownIcon,
   ArrowUpIcon,
   ChevronDownIcon,
@@ -15,11 +16,15 @@ import {
   StarIcon,
   StarOffIcon,
 } from "lucide-react";
-import { T, useGT } from "gt-react";
+import type { EnvironmentId } from "@t3tools/contracts";
+import { T, useGT, useMessages } from "gt-react";
 import { useState, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
 
 import { cn } from "~/lib/utils";
+import { requestCustomSnooze } from "../CustomSnoozeDialog";
 import { ProjectFavicon } from "../ProjectFavicon";
+import { pickSnoozePreset, resolveSnoozePresets } from "../Sidebar.snooze";
+import { useClientSettings } from "../../hooks/useSettings";
 import { TopStatusIcon } from "../sidebar/SidebarThreadRow";
 import { WORKING_ICON_MOTION } from "../tabs/threadTabs.logic";
 import { Button } from "../ui/button";
@@ -28,11 +33,15 @@ import {
   MenuGroup,
   MenuGroupLabel,
   MenuItem,
+  MenuItemDetail,
   MenuPopup,
   MenuRadioGroup,
   MenuRadioItem,
   MenuRadioItemIndicator,
   MenuSeparator,
+  MenuSub,
+  MenuSubPopup,
+  MenuSubTrigger,
   MenuTrigger,
 } from "../ui/menu";
 import {
@@ -69,6 +78,8 @@ export interface RailRowActions {
   readonly finishProjectRename: (projectKey: string, name: string | null) => void;
   readonly removeFolder: (folderId: string) => void;
   readonly hideProject: (projectKey: string) => void;
+  /** Takes the project off the rail until `until`; see the rail store. */
+  readonly snoozeProject: (projectKey: string, until: string) => void;
   readonly setFavorite: (projectKey: string, favorite: boolean) => void;
   /** False while a menu choice moved focus into a folder name, so closing it leaves focus there. */
   readonly restoreMenuFocus: () => boolean;
@@ -559,6 +570,18 @@ export function RailProjectRow(props: {
               <T>New Folder…</T>
             </MenuItem>
             <MenuSeparator />
+            <MenuSub>
+              <MenuSubTrigger>
+                <AlarmClockIcon />
+                <T>Snooze Project</T>
+              </MenuSubTrigger>
+              <MenuSubPopup>
+                <SnoozeProjectChoices
+                  environmentId={group.environmentId}
+                  onSnooze={(until) => actions.snoozeProject(projectKey, until)}
+                />
+              </MenuSubPopup>
+            </MenuSub>
             <MenuItem onClick={() => actions.hideProject(projectKey)}>
               <EyeOffIcon />
               <T>Hide Project</T>
@@ -567,6 +590,50 @@ export function RailProjectRow(props: {
         </RowMenuSlot>
       )}
     </li>
+  );
+}
+
+/**
+ * The times a project can snooze until: the thread snooze choices, with "Until I wake it" first.
+ * Rendered only while the submenu is open, so each opening reads a fresh time.
+ */
+function SnoozeProjectChoices(props: {
+  environmentId: EnvironmentId;
+  onSnooze: (until: string) => void;
+}) {
+  const messages = useMessages();
+  const timestampFormat = useClientSettings((settings) => settings.timestampFormat);
+  // oxlint-disable-next-line react/purity -- Mounted only while the submenu is open; each opening reads the time anew.
+  const presets = resolveSnoozePresets(new Date(), timestampFormat, props.environmentId, messages);
+  return (
+    <>
+      {presets.map((preset) => (
+        <MenuItem
+          key={preset.id}
+          onClick={() => {
+            const picked = pickSnoozePreset(
+              presets,
+              preset.id,
+              timestampFormat,
+              props.environmentId,
+            );
+            if (picked) props.onSnooze(picked.snoozedUntil);
+          }}
+        >
+          {preset.label}
+          <MenuItemDetail>{preset.whenLabel}</MenuItemDetail>
+        </MenuItem>
+      ))}
+      <MenuSeparator />
+      <MenuItem
+        onClick={async () => {
+          const choice = await requestCustomSnooze("project");
+          if (choice) props.onSnooze(choice.snoozedUntil);
+        }}
+      >
+        <T>Custom…</T>
+      </MenuItem>
+    </>
   );
 }
 

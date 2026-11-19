@@ -37,7 +37,7 @@ import type { RailListedThread, RailModel, RailProject } from "./useRailModel";
 type ShelfKind = "snoozed" | "muted" | "settled" | "hidden";
 
 /** A time as "6:00 PM", or "Tue 9:00 AM" when it is not today. */
-function untilLabel(iso: string, timestampFormat: TimestampFormat): string {
+export function untilLabel(iso: string, timestampFormat: TimestampFormat): string {
   const time = formatShortTimestamp(iso, timestampFormat);
   const date = parseTimestampDate(iso);
   if (!date || date.toDateString() === new Date().toDateString()) return time;
@@ -110,7 +110,7 @@ function ShelfRow(props: {
       ) : (
         trigger
       )}
-      <PopoverPopup side="right" align="end" sideOffset={8} width="md" padding="none">
+      <PopoverPopup side="right" align="end" sideOffset={8} width="lg" padding="none">
         {props.children}
       </PopoverPopup>
     </Popover>
@@ -143,7 +143,7 @@ function ShelfThreadRow(props: {
       <button
         type="button"
         onClick={props.onOpen}
-        className="flex min-w-0 flex-1 cursor-pointer flex-col items-start rounded-sm py-1.5 text-left outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+        className="flex min-w-0 flex-1 cursor-pointer flex-col items-start rounded-sm py-2 text-left outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
       >
         <span className="w-full truncate text-sm text-foreground">{thread.title}</span>
         <span className="w-full truncate text-xs text-muted-foreground">
@@ -159,9 +159,45 @@ function ShelfThreadRow(props: {
   );
 }
 
+function ShelfProjectRow(props: {
+  project: RailProject;
+  detail: string | null;
+  actionLabel: string;
+  onAction: () => void;
+  onOpen: () => void;
+}) {
+  const { group } = props.project;
+  return (
+    <li className="flex items-center gap-2 rounded-md px-2 hover:bg-accent/60">
+      <button
+        type="button"
+        onClick={props.onOpen}
+        className="flex min-w-0 flex-1 cursor-pointer items-center gap-2.5 rounded-sm py-2 text-left outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+      >
+        <ProjectFavicon project={group} className="size-4 shrink-0" />
+        <span className="flex min-w-0 flex-1 flex-col">
+          <span className="truncate text-sm text-foreground">{group.displayName}</span>
+          {props.detail ? (
+            <span className="truncate text-xs text-muted-foreground">{props.detail}</span>
+          ) : null}
+        </span>
+      </button>
+      <Button variant="outline" size="xs" className="shrink-0" onClick={props.onAction}>
+        {props.actionLabel}
+      </Button>
+    </li>
+  );
+}
+
+function ShelfSubheading(props: { children: ReactNode }) {
+  return (
+    <p className="px-4 pt-1 pb-1 text-xs font-medium text-muted-foreground">{props.children}</p>
+  );
+}
+
 function ShelfList(props: { children: ReactNode }) {
   return (
-    <ul className="flex max-h-80 flex-col overflow-y-auto px-2 pb-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+    <ul className="flex max-h-[min(36rem,70vh)] flex-col overflow-y-auto px-2 pb-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
       {props.children}
     </ul>
   );
@@ -172,8 +208,8 @@ function ShelfEmpty(props: { children: ReactNode }) {
 }
 
 /**
- * Snoozed, Muted, Settled and Hidden across every project, each opening its own list. Folded,
- * the block is one line of icons and counts.
+ * Snoozed (threads and projects), Muted, Settled and Hidden across every project, each opening
+ * its own list. Folded, the block is one line of icons and counts.
  */
 export function RailShelves(props: {
   model: RailModel;
@@ -182,6 +218,9 @@ export function RailShelves(props: {
   onOpenThread: (threadRef: ScopedThreadRef) => void;
   hidden: readonly RailProject[];
   onShowProject: (projectKey: string) => void;
+  /** Snoozed projects with when each comes back; they list on the Snoozed shelf. */
+  snoozedProjects: readonly { readonly project: RailProject; readonly until: string }[];
+  onWakeProject: (projectKey: string) => void;
   onOpenProject: (project: RailProject) => void;
   collapsed: boolean;
   onCollapsedChange: (collapsed: boolean) => void;
@@ -248,16 +287,52 @@ export function RailShelves(props: {
       <ShelfRow
         icon={<AlarmClockIcon />}
         label={gt("Snoozed")}
-        count={model.snoozed.length}
+        count={model.snoozed.length + props.snoozedProjects.length}
         compact={compact}
         open={openShelf === "snoozed"}
         onOpenChange={shelfOpenChange("snoozed")}
       >
-        <ShelfHeader title={gt("Snoozed Threads")} count={model.snoozed.length} />
+        <ShelfHeader
+          title={gt("Snoozed")}
+          count={model.snoozed.length + props.snoozedProjects.length}
+        />
+        {props.snoozedProjects.length > 0 ? (
+          <>
+            <ShelfSubheading>
+              <T>Projects</T>
+            </ShelfSubheading>
+            <ShelfList>
+              {props.snoozedProjects.map(({ project, until }) => (
+                <ShelfProjectRow
+                  key={project.group.projectKey}
+                  project={project}
+                  detail={
+                    isIndefiniteSnooze(until)
+                      ? gt("Until You Wake It")
+                      : gt("Until {time}", { time: untilLabel(until, timestampFormat) })
+                  }
+                  actionLabel={gt("Wake")}
+                  onAction={() => props.onWakeProject(project.group.projectKey)}
+                  onOpen={() => {
+                    setOpenShelf(null);
+                    props.onOpenProject(project);
+                  }}
+                />
+              ))}
+            </ShelfList>
+          </>
+        ) : null}
+        {model.snoozed.length > 0 && props.snoozedProjects.length > 0 ? (
+          <ShelfSubheading>
+            <T>Threads</T>
+          </ShelfSubheading>
+        ) : null}
         {model.snoozed.length === 0 ? (
-          <ShelfEmpty>
-            <T>Nothing is snoozed.</T>
-          </ShelfEmpty>
+          props.snoozedProjects.length === 0 ? (
+            <ShelfEmpty>
+              <T>Nothing is snoozed. Snooze a thread, or a project from its ⋯ menu.</T>
+            </ShelfEmpty>
+          ) : null
         ) : (
           <ShelfList>
             {model.snoozed.map((entry) => (
@@ -418,32 +493,17 @@ export function RailShelves(props: {
         ) : (
           <ShelfList>
             {props.hidden.map((project) => (
-              <li
+              <ShelfProjectRow
                 key={project.group.projectKey}
-                className="flex items-center gap-2 rounded-md px-2 hover:bg-accent/60"
-              >
-                <button
-                  type="button"
-                  onClick={() => {
-                    setOpenShelf(null);
-                    props.onOpenProject(project);
-                  }}
-                  className="flex min-w-0 flex-1 cursor-pointer items-center gap-2.5 rounded-sm py-2 text-left outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
-                >
-                  <ProjectFavicon project={project.group} className="size-4 shrink-0" />
-                  <span className="min-w-0 flex-1 truncate text-sm text-foreground">
-                    {project.group.displayName}
-                  </span>
-                </button>
-                <Button
-                  variant="outline"
-                  size="xs"
-                  className="shrink-0"
-                  onClick={() => props.onShowProject(project.group.projectKey)}
-                >
-                  <T>Show</T>
-                </Button>
-              </li>
+                project={project}
+                detail={null}
+                actionLabel={gt("Show")}
+                onAction={() => props.onShowProject(project.group.projectKey)}
+                onOpen={() => {
+                  setOpenShelf(null);
+                  props.onOpenProject(project);
+                }}
+              />
             ))}
           </ShelfList>
         )}

@@ -30,6 +30,8 @@ const PersistedRailSchema = Schema.Struct({
   hiddenProjects: Schema.optionalKey(Schema.Array(Schema.String)),
   shelvesCollapsed: Schema.optionalKey(Schema.Boolean),
   favoriteProjects: Schema.optionalKey(Schema.Array(Schema.String)),
+  // Project rail key to the time it comes back; added after hidden projects.
+  snoozedProjects: Schema.optionalKey(Schema.Record(Schema.String, Schema.String)),
   // "favorites" is from before Favorites became its own toggle; it loads as favoritesOnly.
   filter: Schema.optionalKey(Schema.Literals(["all", "favorites", "waiting", "working", "done"])),
   favoritesOnly: Schema.optionalKey(Schema.Boolean),
@@ -53,6 +55,7 @@ const DEFAULT_RAIL: PersistedRail = {
   hiddenProjects: [],
   shelvesCollapsed: false,
   favoriteProjects: [],
+  snoozedProjects: {},
   filter: "all",
   favoritesOnly: false,
   threadColumnOpen: true,
@@ -100,6 +103,12 @@ interface ProjectRailStore extends PersistedRail {
   /** Hidden projects leave the rail but keep their folder and position for when they return. */
   readonly hideProject: (projectKey: string) => void;
   readonly showProject: (projectKey: string) => void;
+  /** A snoozed project leaves the rail until `until`, then comes back where it was. */
+  readonly snoozeProject: (projectKey: string, until: string) => void;
+  /** Brings snoozed projects back now. */
+  readonly wakeProjects: (projectKeys: readonly string[]) => void;
+  /** Puts back a snooze Undo replaces; undefined removes it. */
+  readonly restoreProjectSnooze: (projectKey: string, until: string | undefined) => void;
   readonly setShelvesCollapsed: (collapsed: boolean) => void;
   readonly setProjectFavorite: (projectKey: string, favorite: boolean) => void;
   readonly setFilter: (filter: RailFilter) => void;
@@ -142,6 +151,22 @@ export const useProjectRailStore = create<ProjectRailStore>()(
           const hiddenProjects = removeRailProjectKey(state.hiddenProjects, projectKey);
           return hiddenProjects === state.hiddenProjects ? state : { hiddenProjects };
         }),
+      snoozeProject: (projectKey, until) =>
+        set((state) => ({ snoozedProjects: { ...state.snoozedProjects, [projectKey]: until } })),
+      wakeProjects: (projectKeys) =>
+        set((state) => {
+          if (!projectKeys.some((key) => key in state.snoozedProjects)) return state;
+          const snoozedProjects = { ...state.snoozedProjects };
+          for (const key of projectKeys) delete snoozedProjects[key];
+          return { snoozedProjects };
+        }),
+      restoreProjectSnooze: (projectKey, until) =>
+        set((state) => {
+          const snoozedProjects = { ...state.snoozedProjects };
+          if (until === undefined) delete snoozedProjects[projectKey];
+          else snoozedProjects[projectKey] = until;
+          return { snoozedProjects };
+        }),
       setShelvesCollapsed: (shelvesCollapsed) => set({ shelvesCollapsed }),
       setProjectFavorite: (projectKey, favorite) =>
         set((state) => {
@@ -174,6 +199,7 @@ export const useProjectRailStore = create<ProjectRailStore>()(
         hiddenProjects,
         shelvesCollapsed,
         favoriteProjects,
+        snoozedProjects,
         filter,
         favoritesOnly,
         threadColumnOpen,
@@ -185,6 +211,7 @@ export const useProjectRailStore = create<ProjectRailStore>()(
         hiddenProjects,
         shelvesCollapsed,
         favoriteProjects,
+        snoozedProjects,
         filter,
         favoritesOnly,
         threadColumnOpen,

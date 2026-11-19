@@ -37,7 +37,7 @@ import {
 
 type SnoozeChoice = { readonly snoozedUntil: string };
 /** Muting picks its end time with the same controls as snoozing. */
-type CustomTimePurpose = "snooze" | "mute";
+type CustomTimePurpose = "snooze" | "mute" | "project";
 type Request = {
   readonly purpose: CustomTimePurpose;
   readonly resolve: (choice: SnoozeChoice | null) => void;
@@ -48,6 +48,12 @@ const COPY = {
   snooze: {
     title: msg("Custom snooze"),
     description: msg("Choose when snoozed threads return to your inbox."),
+    amountLabel: msg("Snooze for"),
+    submit: msg("Snooze", { $context: "verb" }),
+  },
+  project: {
+    title: msg("Snooze project"),
+    description: msg("Choose when this project comes back to your sidebar."),
     amountLabel: msg("Snooze for"),
     submit: msg("Snooze", { $context: "verb" }),
   },

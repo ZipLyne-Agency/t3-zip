@@ -137,8 +137,8 @@ function startOfLocalDay(ms: number): number {
 }
 
 /**
- * Sections in reading order: drafts, needs you, working, pinned, then by day. Needs You and
- * Working list the longest waiting first; the rest the newest. Drafts (new threads and threads
+ * Sections in reading order: drafts, needs you, working, pinned, then by day. Needs You lists
+ * the longest waiting first, Working the latest started first, and the rest the newest. Drafts (new threads and threads
  * with unsent text, listed only there) show under every filter. Empty
  * sections are left out.
  */
@@ -178,12 +178,17 @@ export function buildThreadColumnSections<T extends ThreadColumnItem>(
   }
   const oldestFirst = (left: T, right: T) =>
     left.sinceMs - right.sinceMs || (left.key < right.key ? -1 : 1);
+  // Working puts the run you started last on top, the agent you just messaged.
+  const latestStartFirst = (left: T, right: T) =>
+    right.sinceMs - left.sinceMs || (left.key < right.key ? -1 : 1);
   const newestFirst = (left: T, right: T) =>
     right.updatedMs - left.updatedMs || (left.key < right.key ? -1 : 1);
   return (Object.keys(buckets) as ThreadColumnSectionId[]).flatMap((id) => {
     const list = buckets[id];
     if (list.length === 0) return [];
-    const sorted = list.toSorted(id === "needs" || id === "working" ? oldestFirst : newestFirst);
+    const sorted = list.toSorted(
+      id === "needs" ? oldestFirst : id === "working" ? latestStartFirst : newestFirst,
+    );
     return [{ id, label: SECTION_LABELS[id], items: sorted }];
   });
 }
@@ -214,4 +219,21 @@ export function threadColumnAge(age: string, resolve: MessageResolver = m): stri
   return age === "now"
     ? resolve(msg("Now", { $context: "age of a thread that just finished" }))
     : resolve(msg("{age} ago", { age }));
+}
+
+/**
+ * Where to go when threads leave a list while one of them is open: the next thread below the
+ * open one that stays in the list, else the nearest one above it. Null when the open thread
+ * stays, or nothing is left. `listed` is the list in the order it shows.
+ */
+export function nextThreadAfterRemoval<T extends { readonly key: string }>(
+  listed: readonly T[],
+  removedKeys: ReadonlySet<string>,
+  openKey: string | null,
+): T | null {
+  if (openKey === null || !removedKeys.has(openKey)) return null;
+  const at = listed.findIndex((item) => item.key === openKey);
+  if (at === -1) return null;
+  const kept = (item: T) => !removedKeys.has(item.key);
+  return listed.slice(at + 1).find(kept) ?? listed.slice(0, at).findLast(kept) ?? null;
 }
