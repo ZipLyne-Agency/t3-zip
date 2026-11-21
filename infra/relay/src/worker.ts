@@ -217,13 +217,20 @@ export const layer = Api.make(
       },
     });
     const mobileSourceMaps = yield* Cloudflare.R2.ReadBucket(observability.mobileSourceMaps);
-    const mobileTelemetryToken = yield* observability.mobileTelemetryIngestToken.token;
+    // Without the mobile datasets, mobile spans go out with the mobile ingest token, which can
+    // write to the traces dataset, and logs and metrics are not collected.
+    const mobileTelemetryToken = yield* (
+      observability.mobileTelemetryIngestToken ?? observability.mobileIngestToken
+    ).token;
     const mobileTracesUrl = yield* observability.traces.otelTracesEndpoint;
     const mobileTracesDataset = yield* observability.traces.name;
-    const mobileLogsUrl = yield* observability.mobileLogs.otelLogsEndpoint;
-    const mobileLogsDataset = yield* observability.mobileLogs.name;
-    const mobileMetricsUrl = yield* observability.mobileMetrics.otelMetricsEndpoint;
-    const mobileMetricsDataset = yield* observability.mobileMetrics.name;
+    const { mobileLogs, mobileMetrics } = observability;
+    const mobileLogsDestination = mobileLogs
+      ? { url: yield* mobileLogs.otelLogsEndpoint, dataset: yield* mobileLogs.name }
+      : undefined;
+    const mobileMetricsDestination = mobileMetrics
+      ? { url: yield* mobileMetrics.otelMetricsEndpoint, dataset: yield* mobileMetrics.name }
+      : undefined;
 
     const alchemyRuntimeContext: Alchemy.BaseRuntimeContext = yield* Cloudflare.Worker;
 
@@ -407,8 +414,22 @@ export const layer = Api.make(
                 axiomToken: yield* mobileTelemetryToken,
                 destinations: {
                   traces: { url: yield* mobileTracesUrl, dataset: yield* mobileTracesDataset },
-                  logs: { url: yield* mobileLogsUrl, dataset: yield* mobileLogsDataset },
-                  metrics: { url: yield* mobileMetricsUrl, dataset: yield* mobileMetricsDataset },
+                  ...(mobileLogsDestination
+                    ? {
+                        logs: {
+                          url: yield* mobileLogsDestination.url,
+                          dataset: yield* mobileLogsDestination.dataset,
+                        },
+                      }
+                    : {}),
+                  ...(mobileMetricsDestination
+                    ? {
+                        metrics: {
+                          url: yield* mobileMetricsDestination.url,
+                          dataset: yield* mobileMetricsDestination.dataset,
+                        },
+                      }
+                    : {}),
                 },
               });
             }),

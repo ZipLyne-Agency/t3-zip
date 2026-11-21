@@ -41,6 +41,7 @@ import { SidebarContent, SidebarGroup, useSidebar } from "../ui/sidebar";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 import { isIndefiniteSnooze } from "../indefiniteSnooze";
 import { useClientSettings } from "../../hooks/useSettings";
+import { groupMemberKeys } from "../tabs/threadTabs.logic";
 import { useProjectSnoozeClock } from "./useProjectSnooze";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { RailCollapsed } from "./RailCollapsed";
@@ -294,6 +295,25 @@ export function ProjectRail() {
       );
     }
   }, [projects, wokenKey]);
+
+  // A message sent in a hidden or snoozed project brings that project back where it was.
+  const sentInProjects = useProjectRailStore((store) => store.sentInProjects);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- applies a send from the composer, which cannot see project groups, to the rail's hidden and snoozed lists
+  useEffect(() => {
+    if (sentInProjects.length === 0) return;
+    const store = useProjectRailStore.getState();
+    const sent = new Set(sentInProjects);
+    for (const [projectKey, project] of projects) {
+      const hidden = store.hiddenProjects.includes(projectKey);
+      const snoozed = projectKey in store.snoozedProjects;
+      if (!hidden && !snoozed) continue;
+      if (![...groupMemberKeys(project.group)].some((key) => sent.has(key))) continue;
+      if (hidden) store.showProject(projectKey);
+      if (snoozed) store.wakeProjects([projectKey]);
+      store.revealProject(projectKey);
+    }
+    store.clearSentInProjects();
+  }, [projects, sentInProjects]);
 
   const change = (update: (layout: RailLayoutState) => RailLayoutState) =>
     updateLayout(projectKeys, update);
@@ -722,7 +742,7 @@ export function ProjectRail() {
             {noProjectPosition === "top" && !search.isSearching ? noProjectRow : null}
             <div className={cn("px-(--sidebar-content-inset)", search.isSearching && "hidden")}>
               {columnShown ? (
-                <div className="pt-2">
+                <div className={noProjectPosition === "top" && showNoProject ? "pt-px" : "pt-2"}>
                   <RailAllProjectsRow
                     counts={allCounts}
                     running={allRunning}
@@ -742,6 +762,11 @@ export function ProjectRail() {
                   }}
                 />
               )}
+              {/* A hairline sets the views above apart from the project list. */}
+              <div
+                aria-hidden
+                className="mx-(--sidebar-row-content-inset) mt-2 h-px bg-(--rail-divider,var(--sidebar-border))"
+              />
               {railFilter === "all" ? (
                 <ProjectsHeader
                   onNewProject={() => openCommandPalette({ open: "add-project" })}

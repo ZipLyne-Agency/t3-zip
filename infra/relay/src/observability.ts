@@ -6,6 +6,7 @@ import * as Axiom from "@alchemy.run/axiom";
 import * as Cloudflare from "@alchemy.run/cloudflare";
 import * as Output from "alchemy/Output";
 import * as Cause from "effect/Cause";
+import * as Config from "effect/Config";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Option from "effect/Option";
@@ -63,6 +64,50 @@ export const RelayObservability = Effect.gen(function* () {
   });
 
   // expo-observe data, forwarded by src/mobileTelemetry. Mobile spans share the traces dataset.
+  // Logs and metrics need two more datasets, more than Axiom's Personal plan allows next to
+  // anything else in the org, so a deployment can leave them out.
+  const mobileDatasets = yield* Config.Boolean("RELAY_MOBILE_TELEMETRY_DATASETS").pipe(
+    Config.withDefault(true),
+  );
+  const mobileTelemetry = mobileDatasets
+    ? yield* MobileTelemetryDatasets(stage, traces)
+    : undefined;
+  const mobileLogs = mobileTelemetry?.mobileLogs;
+  const mobileMetrics = mobileTelemetry?.mobileMetrics;
+  const mobileTelemetryIngestToken = mobileTelemetry?.mobileTelemetryIngestToken;
+
+  const mobileSourceMaps = yield* Cloudflare.R2.Bucket("MobileSourceMapsBucket", {
+    name: mobileSourceMapsBucketName(stage),
+    // R2 refuses to delete a non-empty bucket, which would half tear down every non-prod stage.
+    forceDestroy: stage !== "prod",
+  });
+
+  yield* Axiom.View("RelayRecentSpansView", {
+    name: relayResourceNameForStage("t3-code-relay-recent-spans", stage),
+    description: "Recent relay HTTP request spans.",
+    datasets: [traces.name],
+    aplQuery: Output.map(traces.name, relayRecentSpansQuery),
+  });
+
+  yield* RelayMonitoring(traces);
+  if (mobileLogs) yield* MobileMonitoring(mobileLogs, traces);
+
+  return {
+    traces,
+    workerIngestToken,
+    mobileIngestToken,
+    clientIngestToken,
+    mobileLogs,
+    mobileMetrics,
+    mobileTelemetryIngestToken,
+    mobileSourceMaps,
+  } as const;
+});
+
+const MobileTelemetryDatasets = Effect.fn("MobileTelemetryDatasets")(function* (
+  stage: string,
+  traces: Axiom.Dataset,
+) {
   const mobileLogs = yield* Axiom.Dataset("MobileLogsDataset", {
     name: relayResourceNameForStage("t3-code-mobile-logs", stage),
     kind: "otel:logs:v1",
@@ -86,33 +131,7 @@ export const RelayObservability = Effect.gen(function* () {
         Object.fromEntries(datasets.map((dataset) => [dataset, { ingest: ["create" as const] }])),
     ),
   });
-
-  const mobileSourceMaps = yield* Cloudflare.R2.Bucket("MobileSourceMapsBucket", {
-    name: mobileSourceMapsBucketName(stage),
-    // R2 refuses to delete a non-empty bucket, which would half tear down every non-prod stage.
-    forceDestroy: stage !== "prod",
-  });
-
-  yield* Axiom.View("RelayRecentSpansView", {
-    name: relayResourceNameForStage("t3-code-relay-recent-spans", stage),
-    description: "Recent relay HTTP request spans.",
-    datasets: [traces.name],
-    aplQuery: Output.map(traces.name, relayRecentSpansQuery),
-  });
-
-  yield* RelayMonitoring(traces);
-  yield* MobileMonitoring(mobileLogs, traces);
-
-  return {
-    traces,
-    workerIngestToken,
-    mobileIngestToken,
-    clientIngestToken,
-    mobileLogs,
-    mobileMetrics,
-    mobileTelemetryIngestToken,
-    mobileSourceMaps,
-  } as const;
+  return { mobileLogs, mobileMetrics, mobileTelemetryIngestToken };
 });
 
 const mobileSourceMapsBucketName = (stage: string) =>
@@ -123,6 +142,12 @@ const mobileSourceMapsBucketName = (stage: string) =>
  * R2's S3 access key id is the API token's id and the secret the SHA-256 of its value.
  */
 export const MobileSourceMapsUploadCredentials = Effect.gen(function* () {
+  // Minting this token needs "Account API Tokens Write"; deployments that do not upload
+  // mobile source maps can turn it off.
+  const enabled = yield* Config.Boolean("RELAY_MOBILE_SOURCEMAPS_UPLOAD_TOKEN").pipe(
+    Config.withDefault(true),
+  );
+  if (!enabled) return undefined;
   const { stage } = yield* Alchemy.Stack;
   const { accountId } = yield* yield* Cloudflare.CloudflareEnvironment;
   const bucketName = mobileSourceMapsBucketName(stage);

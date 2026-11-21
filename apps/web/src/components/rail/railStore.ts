@@ -90,6 +90,13 @@ function readPersistedRail(persisted: unknown): Partial<typeof PersistedRailSche
 }
 
 interface ProjectRailStore extends PersistedRail {
+  /**
+   * Projects a message was just sent in, as `environmentId:projectId`. The rail brings each
+   * one back if it is hidden or snoozed, then empties the list. Not saved.
+   */
+  readonly sentInProjects: readonly string[];
+  readonly noteSentInProject: (memberKey: string) => void;
+  readonly clearSentInProjects: () => void;
   /** Applies a layout change on top of the stored order with every known project placed. */
   readonly updateLayout: (
     knownProjectKeys: readonly string[],
@@ -123,6 +130,15 @@ export const useProjectRailStore = create<ProjectRailStore>()(
   persist(
     (set) => ({
       ...DEFAULT_RAIL,
+      sentInProjects: [],
+      noteSentInProject: (memberKey) =>
+        set((state) =>
+          state.sentInProjects.includes(memberKey)
+            ? state
+            : { sentInProjects: [...state.sentInProjects, memberKey] },
+        ),
+      clearSentInProjects: () =>
+        set((state) => (state.sentInProjects.length === 0 ? state : { sentInProjects: [] })),
       updateLayout: (knownProjectKeys, change) =>
         set((state) => {
           const layout = change(materializeRailLayout(state.layout, knownProjectKeys));

@@ -209,6 +209,8 @@ export function useRailThreadSearch(input: {
                 searchMatchQuery={threadSearch.query}
                 onHighlight={() => setHighlightKey(threadKey)}
                 onSelect={() => select(thread)}
+                // The rail has no thread context menu; right-click on a result does nothing here.
+                onContextMenu={() => {}}
                 onFileDropThreads={onFileDropThreads}
               />
             );

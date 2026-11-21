@@ -5,12 +5,15 @@ import appleAppSiteAssociation from "../web/public/.well-known/apple-app-site-as
 import assetLinks from "../web/public/.well-known/assetlinks.json";
 
 // Keep config parsing independent of local env files and build credentials.
+const repoEnvOverrides = vi.hoisted(() => ({}) as Record<string, string>);
+
 vi.mock("../../scripts/lib/public-config.ts", () => ({
-  loadRepoEnv: () => ({ APP_VARIANT: process.env.APP_VARIANT }),
+  loadRepoEnv: () => ({ APP_VARIANT: process.env.APP_VARIANT, ...repoEnvOverrides }),
 }));
 
 afterEach(() => {
   vi.unstubAllEnvs();
+  for (const name of Object.keys(repoEnvOverrides)) delete repoEnvOverrides[name];
 });
 
 async function loadConfig(variant: string | undefined) {
@@ -44,4 +47,29 @@ it.each([
     { scheme: "https", host, pathPrefix: "/threads/" },
   ]);
   expect(assetLinks.map((link) => link.target.package_name)).toContain(identifier);
+});
+
+it("builds another team's distribution from the identity override", async () => {
+  Object.assign(repoEnvOverrides, {
+    T3CODE_MOBILE_APP_NAME: "T3 Zip",
+    T3CODE_IOS_BUNDLE_ID: "agency.example.t3zip",
+    T3CODE_IOS_TEAM_ID: "TEAM123456",
+    T3CODE_CLERK_RELYING_PARTY: "clerk.example.agency",
+    T3CODE_MOBILE_HOSTED_APP_HOST: "none",
+    T3CODE_IOS_BUILD_NUMBER: "202611210001",
+  });
+  const config = await loadConfig("production");
+  expect(config.name).toBe("T3 Zip");
+  expect(config.ios?.bundleIdentifier).toBe("agency.example.t3zip");
+  expect(config.ios?.appleTeamId).toBe("TEAM123456");
+  expect(config.ios?.buildNumber).toBe("202611210001");
+  // The keychain group follows the bundle id, or Clerk sessions would not persist.
+  expect(config.ios?.entitlements?.["keychain-access-groups"]).toEqual([
+    "$(AppIdentifierPrefix)agency.example.t3zip",
+  ]);
+  expect(config.ios?.associatedDomains).toEqual([
+    "applinks:clerk.example.agency",
+    "webcredentials:clerk.example.agency",
+  ]);
+  expect(config.android?.intentFilters).toEqual([]);
 });

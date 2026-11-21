@@ -288,13 +288,19 @@ function RailRowText(props: {
   detail: string;
   counts: RailCounts | null;
   favorite?: boolean;
+  /** No Project and All Projects: views above the project list, named in a heavier weight. */
+  emphasized?: boolean;
 }) {
   const gt = useGT();
   const open = props.counts?.open ?? 0;
   return (
     <span className="flex min-w-0 flex-1 flex-col">
       <span className="flex min-w-0 items-center gap-1">
-        <span className="min-w-0 truncate text-sm leading-5">{props.name}</span>
+        <span
+          className={cn("min-w-0 truncate text-sm leading-5", props.emphasized && "font-medium")}
+        >
+          {props.name}
+        </span>
         {props.favorite ? (
           <StarIcon
             role="img"
@@ -848,6 +854,7 @@ export function RailNoProjectRow(props: {
           name={gt("No Project")}
           detail={props.project?.detail ?? gt("No open threads")}
           counts={props.project?.counts ?? null}
+          emphasized
         />
         <RailTrailing menuOpen={menu.open} age={props.project?.age ?? null}>
           {props.project ? (
@@ -916,7 +923,12 @@ export function RailAllProjectsRow(props: {
       >
         <LayoutGridIcon className="size-2.5" />
       </span>
-      <RailRowText name={gt("All Projects")} detail={props.detail} counts={props.counts} />
+      <RailRowText
+        name={gt("All Projects")}
+        detail={props.detail}
+        counts={props.counts}
+        emphasized
+      />
       <span className="flex shrink-0 items-center gap-1.5">
         <RailStats counts={props.counts} topStatus={null} running={props.running} />
       </span>

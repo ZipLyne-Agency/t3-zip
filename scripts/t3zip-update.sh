@@ -369,9 +369,23 @@ readonly PUBLIC_CONFIG_NAMES=(
   T3CODE_RELAY_URL
 )
 
-# Prints one public setting from .env.example, or nothing.
+# Which T3 Connect the desktop build talks to: "upstream" (T3 Code's relay and sign-in, from
+# .env.example) or "own" (T3 Zip's relay and Clerk, from scripts/t3zip.connect.env). A phone
+# pairs only through the relay its app was built for, so switch to "own" once the T3 Zip
+# iPhone app is installed.
+readonly CONNECT="${T3ZIP_CONNECT:-upstream}"
+case "$CONNECT" in
+  upstream) readonly PUBLIC_CONFIG_FILE="$REPO/.env.example" ;;
+  own)
+    readonly PUBLIC_CONFIG_FILE="$REPO/scripts/t3zip.connect.env"
+    [[ -f "$PUBLIC_CONFIG_FILE" ]] || { echo "T3ZIP_CONNECT=own needs $PUBLIC_CONFIG_FILE" >&2; exit 1; }
+    ;;
+  *) echo "T3ZIP_CONNECT must be upstream or own, not '$CONNECT'" >&2; exit 2 ;;
+esac
+
+# Prints one public setting from the selected T3 Connect config, or nothing.
 public_config_value() {
-  sed -n "s|^$1=||p" "$REPO/.env.example" 2>/dev/null | awk 'NR == 1'
+  sed -n "s|^$1=||p" "$PUBLIC_CONFIG_FILE" 2>/dev/null | awk 'NR == 1'
 }
 
 step_build() {
@@ -433,7 +447,7 @@ step_identity() {
   local name value
   for name in "${PUBLIC_CONFIG_NAMES[@]}"; do
     value="$(public_config_value "$name")"
-    [[ -n "$value" ]] || { echo ".env.example no longer sets $name, so T3 Connect would be off"; return 1; }
+    [[ -n "$value" ]] || { echo "$PUBLIC_CONFIG_FILE does not set $name, so T3 Connect would be off"; return 1; }
     LC_ALL=C grep -q -a -F "$value" "$app/Contents/Resources/app.asar" \
       || { echo "the build does not carry $name, so T3 Connect would be off"; return 1; }
   done
@@ -558,7 +572,9 @@ push_backup() {
 # ---------------------------------------------------------------------------
 
 # Paths that stay private: design mockups and the artifact ledger name real projects.
-readonly PUBLIC_EXCLUDE=(claude_artifacts CLAUDE-ARTIFACTS.md scripts/t3zip.local.env)
+# The relay and iPhone scripts name this owner's accounts (zone, Apple team, Infisical projects).
+readonly PUBLIC_EXCLUDE=(claude_artifacts CLAUDE-ARTIFACTS.md scripts/t3zip.local.env
+  scripts/t3zip-relay.sh scripts/t3zip-ios.sh scripts/t3zip.connect.env)
 # The last snapshot made, so each new one builds on it and the push is a fast-forward.
 readonly PUBLIC_REF="refs/t3zip/public"
 
@@ -758,6 +774,28 @@ cmd_sync() {
   rm -f "$ATTENTION"
   log "staged $tag (${merged:0:7}) at $app, migrations=$migrations"
   push_backup
+  follow_companions "$prev" "$merged"
+}
+
+# The T3 Zip iPhone app and relay follow the same branch. An update that touched the app (or
+# the packages it uses) ships a TestFlight build; one that touched the relay raises a notice,
+# since deploying the relay stays a deliberate step (scripts/t3zip-relay.sh deploy).
+# T3ZIP_IOS_NIGHTLY=0 in t3zip.local.env turns the iPhone build off.
+readonly IOS_LOG="$HOME/Library/Logs/t3zip-ios.log"
+follow_companions() {
+  local from="$1" to="$2"
+  if [[ -x "$REPO/scripts/t3zip-relay.sh" ]] && ! git diff --quiet "$from" "$to" -- infra/relay; then
+    notify "t3zip-relay-changed" \
+      "This update changed the T3 Connect relay. Deploy it with scripts/t3zip-relay.sh deploy."
+  fi
+  if [[ "${T3ZIP_IOS_NIGHTLY:-1}" == "1" && -x "$REPO/scripts/t3zip-ios.sh" ]] && ! git diff --quiet "$from" "$to" -- apps/mobile packages; then
+    log "building the iPhone app for TestFlight"
+    if "$REPO/scripts/t3zip-ios.sh" release >>"$IOS_LOG" 2>&1; then
+      log "iPhone app uploaded to TestFlight"
+    else
+      notify "t3zip-ios-failed" "The iPhone build or TestFlight upload failed. Log: $IOS_LOG"
+    fi
+  fi
 }
 
 # ---------------------------------------------------------------------------

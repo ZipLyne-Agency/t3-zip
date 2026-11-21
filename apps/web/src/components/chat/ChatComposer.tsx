@@ -56,6 +56,7 @@ import { isPasteAsTextShortcut } from "@t3tools/client-runtime/text-paste";
 import { scopedThreadKey, scopeThreadRef } from "@t3tools/client-runtime/environment";
 import * as ThreadUndo from "@t3tools/client-runtime/state/thread-undo";
 import { useUiStateStore } from "../../uiStateStore";
+import { useProjectRailStore } from "../rail/railStore";
 import { CLEAR_UNDO_KIND } from "../rail/useClearFromDone";
 import { serializeComposerFileLink } from "@t3tools/shared/composerTrigger";
 import { type FolderDropTarget, folderDropTarget, resolveDroppedFolderPath } from "./folderDrop";
@@ -2256,6 +2257,10 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       const threadKey = scopedThreadKey(scopeThreadRef(environmentId, activeThreadId));
       useUiStateStore.getState().clearDoneThreads([threadKey], new Date().toISOString());
       ThreadUndo.invalidate(CLEAR_UNDO_KIND, threadKey);
+    }
+    // Working in a hidden or snoozed project brings it back to the rail.
+    if (activeProjectId) {
+      useProjectRailStore.getState().noteSentInProject(`${environmentId}:${activeProjectId}`);
     }
     onTypingGuardSend();
     if (shouldBlurMobileComposerOnSubmit()) {

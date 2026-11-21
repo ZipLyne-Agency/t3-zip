@@ -60,7 +60,8 @@ export class MobileTelemetrySettings extends Context.Service<
   MobileTelemetrySettings,
   {
     readonly axiomToken: Redacted.Redacted<string>;
-    readonly destinations: Readonly<Record<RelayMobileTelemetrySignal, AxiomDestination>>;
+    /** A signal without a destination is not collected by this deployment. */
+    readonly destinations: Readonly<Partial<Record<RelayMobileTelemetrySignal, AxiomDestination>>>;
   }
 >()("t3code-relay/mobileTelemetry/MobileTelemetry/MobileTelemetrySettings") {}
 
@@ -271,6 +272,12 @@ const make = Effect.gen(function* () {
       });
     }
 
+    const destination = settings.destinations[signal];
+    if (destination === undefined) {
+      yield* outcome("signal_disabled");
+      return errorResponse(404, "signal_disabled");
+    }
+
     const read = yield* (
       hasNoBody(request)
         ? Effect.succeed(new Uint8Array(0))
@@ -295,7 +302,7 @@ const make = Effect.gen(function* () {
           )) ?? read.success)
         : read.success;
 
-    const upstream = yield* forward(settings.destinations[signal], body).pipe(Effect.result);
+    const upstream = yield* forward(destination, body).pipe(Effect.result);
     if (Result.isFailure(upstream)) {
       yield* outcome("upstream_unavailable");
       return errorResponse(502, "upstream_unavailable");

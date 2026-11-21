@@ -117,9 +117,39 @@ function resolveAppVariant(value: string | undefined): AppVariant {
   }
 }
 
-const variant = VARIANT_CONFIG[APP_VARIANT];
+// A distribution of the app under another Apple team (such as a fork on its own TestFlight)
+// sets these together; unset, every variant keeps its defaults above.
+const identityOverride = {
+  appName: repoEnv.T3CODE_MOBILE_APP_NAME?.trim() || undefined,
+  scheme: repoEnv.T3CODE_MOBILE_SCHEME?.trim() || undefined,
+  iosBundleIdentifier: repoEnv.T3CODE_IOS_BUNDLE_ID?.trim() || undefined,
+  appleTeamId: repoEnv.T3CODE_IOS_TEAM_ID?.trim() || undefined,
+  relyingParty: repoEnv.T3CODE_CLERK_RELYING_PARTY?.trim() || undefined,
+  // "none" drops the hosted thread links, whose .well-known only lists T3 Code's own apps.
+  hostedAppHost: repoEnv.T3CODE_MOBILE_HOSTED_APP_HOST?.trim() || undefined,
+  iosBuildNumber: repoEnv.T3CODE_IOS_BUILD_NUMBER?.trim() || undefined,
+};
+if (
+  identityOverride.iosBundleIdentifier &&
+  !IOS_BUNDLE_IDENTIFIER_PATTERN.test(identityOverride.iosBundleIdentifier)
+) {
+  throw new Error("T3CODE_IOS_BUNDLE_ID must be a reverse-DNS identifier.");
+}
+
+const variant = {
+  ...VARIANT_CONFIG[APP_VARIANT],
+  ...(identityOverride.appName ? { appName: identityOverride.appName } : {}),
+  ...(identityOverride.scheme ? { scheme: identityOverride.scheme } : {}),
+  ...(identityOverride.iosBundleIdentifier
+    ? { iosBundleIdentifier: identityOverride.iosBundleIdentifier }
+    : {}),
+  ...(identityOverride.relyingParty ? { relyingParty: identityOverride.relyingParty } : {}),
+};
 // Copied thread links open the app. app.t3.codes/.well-known lists every variant's identifiers.
-const HOSTED_APP_HOST = "app.t3.codes";
+const HOSTED_APP_HOST =
+  identityOverride.hostedAppHost === "none"
+    ? undefined
+    : (identityOverride.hostedAppHost ?? "app.t3.codes");
 const iosBundleIdentifier = isIosPersonalTeamBuild
   ? personalTeamBundleIdentifier!
   : variant.iosBundleIdentifier;
@@ -256,12 +286,13 @@ const config: ExpoConfig = {
     supportsTablet: true,
     requireFullScreen: process.env.T3_SHOWCASE_CAPTURE_BUILD === "1",
     bundleIdentifier: iosBundleIdentifier,
+    ...(identityOverride.iosBuildNumber ? { buildNumber: identityOverride.iosBuildNumber } : {}),
     // Avoid Personal Team fallback: it cannot sign App Groups, Apple sign-in or push entitlements.
-    appleTeamId: "ARK85ZXQ4Z",
+    appleTeamId: identityOverride.appleTeamId ?? "ARK85ZXQ4Z",
     associatedDomains: [
       `applinks:${variant.relyingParty}`,
       `webcredentials:${variant.relyingParty}`,
-      `applinks:${HOSTED_APP_HOST}`,
+      ...(HOSTED_APP_HOST ? [`applinks:${HOSTED_APP_HOST}`] : []),
     ],
     entitlements: {
       "keychain-access-groups": [`$(AppIdentifierPrefix)${variant.iosBundleIdentifier}`],
@@ -314,14 +345,16 @@ const config: ExpoConfig = {
     predictiveBackGestureEnabled: true,
     // expo-sensors declares this for its pedometer, which the app does not use.
     blockedPermissions: ["android.permission.ACTIVITY_RECOGNITION"],
-    intentFilters: [
-      {
-        action: "VIEW",
-        autoVerify: true,
-        data: [{ scheme: "https", host: HOSTED_APP_HOST, pathPrefix: "/threads/" }],
-        category: ["BROWSABLE", "DEFAULT"],
-      },
-    ],
+    intentFilters: HOSTED_APP_HOST
+      ? [
+          {
+            action: "VIEW",
+            autoVerify: true,
+            data: [{ scheme: "https", host: HOSTED_APP_HOST, pathPrefix: "/threads/" }],
+            category: ["BROWSABLE", "DEFAULT"],
+          },
+        ]
+      : [],
   },
   web: {
     favicon: variant.assets.appIcon,
