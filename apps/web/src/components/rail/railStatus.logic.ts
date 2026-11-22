@@ -1,10 +1,21 @@
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
 import { effectiveSnoozed } from "@t3tools/client-runtime/state/thread-settled";
 import { backgroundWorkHoldsCompletion } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
-import { isMutedCompletion, isThreadMuted } from "@t3tools/shared/threadMute";
+import {
+  openThreadStatusFromRow,
+  type OpenThreadStatus,
+} from "@t3tools/client-runtime/state/thread-status-filter";
+import { isThreadMuted } from "@t3tools/shared/threadMute";
 import { msg } from "gt-react";
 
 import { m, type MessageResolver } from "../../i18n/messages";
+
+export {
+  isAwaitingClear,
+  resolveDoneSection,
+  type DoneSection,
+  type OpenThreadStatus,
+} from "@t3tools/client-runtime/state/thread-status-filter";
 import { hasUnseenCompletion, resolveSidebarRowStatus } from "../Sidebar.logic";
 
 /**
@@ -22,8 +33,6 @@ export function isRailOpenThread(
   if (thread.settledOverride === "settled") return false;
   return !effectiveSnoozed(thread, { now: input.nowIso });
 }
-
-export type OpenThreadStatus = "needs" | "failed" | "working" | "done" | "idle";
 
 /**
  * Commands and monitors still running after the agent's turn ended that it did not say it
@@ -50,29 +59,12 @@ export function resolveOpenThreadStatus(
   muted: boolean,
 ): OpenThreadStatus {
   if (muted) return "idle";
-  const status = resolveSidebarRowStatus(thread);
-  switch (status) {
-    case "approval":
-    case "input":
-    case "request":
-    // A usage limit waits on you.
-    case "limited":
-      return "needs";
-    case "failed":
-      return "failed";
-    case "preparing":
-    case "working":
-      return "working";
-    case "waiting":
-      // Waiting on a child thread or on subagents the turn left running is still work; a
-      // session that is simply idle is not.
-      return thread.runtime?.status === "running" ||
-        backgroundWorkHoldsCompletion(thread.pendingBackgroundTasks ?? [])
-        ? "working"
-        : "idle";
-    case "ready":
-      return hasUnseenCompletion(thread) ? "done" : "idle";
-  }
+  return openThreadStatusFromRow({
+    rowStatus: resolveSidebarRowStatus(thread),
+    muted,
+    unseenCompletion: hasUnseenCompletion(thread),
+    thread,
+  });
 }
 
 export type RailThreadState = "needs" | "failed" | "working" | "done" | "quiet";
@@ -101,51 +93,6 @@ export function railProjectRunningCount(
     }
   }
   return running;
-}
-
-/**
- * A finished thread you opened but have not cleared, which Done keeps under Opened. Pass it a
- * thread whose status is idle: one Done counts as New has not been opened yet. Its latest run
- * must have completed after both the clear mark and `reviewSince`, the day this device began
- * keeping finished threads, and outside a mute, which keeps a thread quiet.
- */
-export function isAwaitingClear(
-  thread: Parameters<typeof isMutedCompletion>[0] & Pick<EnvironmentThreadShell, "latestRun">,
-  clearedAt: string | undefined,
-  reviewSince: string | null,
-): boolean {
-  const run = thread.latestRun;
-  if (run?.status !== "completed" || !run.completedAt) return false;
-  const completedMs = Date.parse(run.completedAt);
-  if (Number.isNaN(completedMs)) return false;
-  if (isMutedCompletion(thread, run.completedAt)) return false;
-  const floors = [clearedAt, reviewSince].map((value) => (value ? Date.parse(value) : NaN));
-  return floors.every((floor) => Number.isNaN(floor) || completedMs > floor);
-}
-
-/** Where Done lists a thread: New until you open it, then Opened until you clear it. */
-export type DoneSection = "new" | "opened";
-
-/**
- * Where Done lists a thread, or null when it is not there. A New thread leaves once it is
- * cleared, even before the server records the visit; an Opened one follows isAwaitingClear.
- * Threads finished before `reviewSince` but never opened still list as New, as they did.
- */
-export function resolveDoneSection(
-  status: OpenThreadStatus,
-  muted: boolean,
-  thread: Parameters<typeof isAwaitingClear>[0],
-  clearedAt: string | undefined,
-  reviewSince: string | null,
-): DoneSection | null {
-  if (muted) return null;
-  if (status === "done") {
-    const completedMs = Date.parse(thread.latestRun?.completedAt ?? "");
-    const clearedMs = clearedAt ? Date.parse(clearedAt) : NaN;
-    return Number.isNaN(clearedMs) || !(completedMs <= clearedMs) ? "new" : null;
-  }
-  if (status === "idle" && isAwaitingClear(thread, clearedAt, reviewSince)) return "opened";
-  return null;
 }
 
 export interface RailCounts {

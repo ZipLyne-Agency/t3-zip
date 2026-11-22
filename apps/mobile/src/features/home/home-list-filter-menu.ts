@@ -34,11 +34,12 @@ export interface HomeListFilterMenuProject {
 export function buildHomeListFilterMenuItems(
   props: {
     readonly environments: ReadonlyArray<HomeListFilterMenuEnvironment>;
-    readonly projects: ReadonlyArray<HomeListFilterMenuProject>;
     readonly selectedEnvironmentId: EnvironmentId | null;
-    readonly selectedProjectKey: string | null;
     readonly onEnvironmentChange: (environmentId: EnvironmentId | null) => void;
-    readonly onProjectChange: (projectKey: string | null) => void;
+    /** The split-view sidebar's project filter; Home picks projects in its project switcher. */
+    readonly projects?: ReadonlyArray<HomeListFilterMenuProject>;
+    readonly selectedProjectKey?: string | null;
+    readonly onProjectChange?: (projectKey: string | null) => void;
   },
   resolve: MessageResolver = m,
 ): AppBarMenuItem[] {
@@ -64,7 +65,8 @@ export function buildHomeListFilterMenuItems(
     },
   ];
 
-  if (props.projects.length > 0) {
+  const { onProjectChange } = props;
+  if (props.projects && props.projects.length > 0 && onProjectChange) {
     items.push({
       id: "project",
       title: resolve(msg("Project", { $context: "filter menu heading" })),
@@ -73,14 +75,14 @@ export function buildHomeListFilterMenuItems(
           id: "project:all",
           title: resolve(msg("All projects")),
           subtitle: resolve(msg("Show threads from every project")),
-          selected: props.selectedProjectKey === null,
-          onPress: () => props.onProjectChange(null),
+          selected: (props.selectedProjectKey ?? null) === null,
+          onPress: () => onProjectChange(null),
         },
         ...props.projects.map((project) => ({
           id: `project:${project.key}`,
           title: project.label,
           selected: props.selectedProjectKey === project.key,
-          onPress: () => props.onProjectChange(project.key),
+          onPress: () => onProjectChange(project.key),
         })),
       ],
     });

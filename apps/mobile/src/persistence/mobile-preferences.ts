@@ -71,6 +71,22 @@ const ThreadListFilters = Schema.Struct({
 });
 export type ThreadListFilters = typeof ThreadListFilters.Type;
 
+/** Which threads the list shows: every one, or those waiting on you, running, or finished. */
+export const ThreadListStatusFilter = Schema.Literals(["all", "waiting", "working", "done"]);
+export type ThreadListStatusFilter = typeof ThreadListStatusFilter.Type;
+const isThreadListStatusFilter = Schema.is(ThreadListStatusFilter);
+
+/**
+ * Finished threads cleared from Done on this device, as on the desktop: each thread's clear
+ * time by `environmentId:threadId`, and when this device began keeping finished threads.
+ */
+const ThreadDoneClears = Schema.Struct({
+  reviewSince: Schema.String,
+  clearedAt: Schema.Record(Schema.String, Schema.String),
+});
+export type ThreadDoneClears = typeof ThreadDoneClears.Type;
+const isThreadDoneClears = Schema.is(ThreadDoneClears);
+
 const PullRequestListPreferences = Schema.Struct({
   environmentId: Schema.NullOr(Schema.String),
   controls: Schema.Record(Schema.String, PullRequestListControls),
@@ -158,6 +174,8 @@ export interface Preferences {
   readonly crashReportsEnabled?: boolean;
   readonly connectOnboardingOptOutAccounts?: ReadonlyArray<string>;
   readonly collapsedProjectGroups?: readonly string[];
+  /** Project drawer folders folded on this device; the folders themselves are shared. */
+  readonly projectDrawerCollapsedFolders?: readonly string[];
   readonly dismissedDatabaseStorageNotices?: readonly string[];
   /** Hardware-keyboard Return behavior in the composer. */
   readonly composerEnterBehavior?: ComposerEnterBehavior;
@@ -179,6 +197,8 @@ export interface Preferences {
   readonly threadListSnoozedShelfExpanded?: boolean;
   readonly threadListWorkingShelfExpanded?: boolean;
   readonly threadListFilters?: ThreadListFilters;
+  readonly threadListStatusFilter?: ThreadListStatusFilter;
+  readonly threadDoneClears?: ThreadDoneClears;
   readonly pullRequestListFilters?: PullRequestListPreferences;
   readonly workspaceSelections?: WorkspaceSelections;
   readonly pullRequestSavedViews?: ReadonlyArray<PullRequestSavedView>;
@@ -250,6 +270,7 @@ function sanitizePreferences(parsed: Preferences): Preferences {
     crashReportsEnabled?: boolean;
     connectOnboardingOptOutAccounts?: ReadonlyArray<string>;
     collapsedProjectGroups?: readonly string[];
+    projectDrawerCollapsedFolders?: readonly string[];
     dismissedDatabaseStorageNotices?: readonly string[];
     composerEnterBehavior?: ComposerEnterBehavior;
     followUpBehavior?: FollowUpBehavior;
@@ -266,6 +287,8 @@ function sanitizePreferences(parsed: Preferences): Preferences {
     threadListSnoozedShelfExpanded?: boolean;
     threadListWorkingShelfExpanded?: boolean;
     threadListFilters?: ThreadListFilters;
+    threadListStatusFilter?: ThreadListStatusFilter;
+    threadDoneClears?: ThreadDoneClears;
     pullRequestListFilters?: PullRequestListPreferences;
     workspaceSelections?: WorkspaceSelections;
     pullRequestSavedViews?: ReadonlyArray<PullRequestSavedView>;
@@ -357,6 +380,11 @@ function sanitizePreferences(parsed: Preferences): Preferences {
       (key): key is string => typeof key === "string",
     );
   }
+  if (Array.isArray(parsed.projectDrawerCollapsedFolders)) {
+    preferences.projectDrawerCollapsedFolders = parsed.projectDrawerCollapsedFolders.filter(
+      (key): key is string => typeof key === "string",
+    );
+  }
   if (Array.isArray(parsed.dismissedDatabaseStorageNotices)) {
     preferences.dismissedDatabaseStorageNotices = parsed.dismissedDatabaseStorageNotices.filter(
       (value): value is string => typeof value === "string",
@@ -422,6 +450,12 @@ function sanitizePreferences(parsed: Preferences): Preferences {
   }
   if (isThreadListFilters(parsed.threadListFilters)) {
     preferences.threadListFilters = parsed.threadListFilters;
+  }
+  if (isThreadListStatusFilter(parsed.threadListStatusFilter)) {
+    preferences.threadListStatusFilter = parsed.threadListStatusFilter;
+  }
+  if (isThreadDoneClears(parsed.threadDoneClears)) {
+    preferences.threadDoneClears = parsed.threadDoneClears;
   }
   if (isPullRequestListPreferences(parsed.pullRequestListFilters)) {
     preferences.pullRequestListFilters = parsed.pullRequestListFilters;

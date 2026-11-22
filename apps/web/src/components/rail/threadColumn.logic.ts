@@ -1,3 +1,7 @@
+import {
+  countThreadStatusFilters,
+  matchesThreadStatusFilter,
+} from "@t3tools/client-runtime/state/thread-status-filter";
 import { msg } from "gt-react";
 
 import { m, type MessageResolver } from "../../i18n/messages";
@@ -96,38 +100,17 @@ export interface ThreadColumnSection<T> {
   readonly items: T[];
 }
 
-/**
- * The rail filter's rule for one thread: Waiting is needs you or failed, and Done keeps a
- * finished thread until it is cleared, opened or not.
- */
 function matchesRailFilter(
   item: Pick<ThreadColumnItem, "status" | "doneSection">,
   filter: RailFilter,
 ): boolean {
-  const { status } = item;
-  switch (filter) {
-    case "all":
-      return true;
-    case "waiting":
-      return status === "needs" || status === "failed";
-    case "working":
-      return status === "working";
-    case "done":
-      return item.doneSection !== null;
-  }
+  return matchesThreadStatusFilter(item, filter);
 }
 
 export function countThreadColumnFilters(
   items: ReadonlyArray<Pick<ThreadColumnItem, "kind" | "status" | "doneSection">>,
 ): Record<Exclude<RailFilter, "all">, number> {
-  const counts = { waiting: 0, working: 0, done: 0 };
-  for (const item of items) {
-    if (item.kind !== "thread") continue;
-    if (matchesRailFilter(item, "waiting")) counts.waiting += 1;
-    else if (item.status === "working") counts.working += 1;
-    else if (matchesRailFilter(item, "done")) counts.done += 1;
-  }
-  return counts;
+  return countThreadStatusFilters(items.filter((item) => item.kind === "thread"));
 }
 
 function startOfLocalDay(ms: number): number {

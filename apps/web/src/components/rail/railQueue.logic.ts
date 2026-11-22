@@ -1,4 +1,4 @@
-import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/models";
+import { threadStatusSinceMs } from "@t3tools/client-runtime/state/thread-status-filter";
 import { msg } from "gt-react";
 
 import { m, type MessageResolver } from "../../i18n/messages";
@@ -34,32 +34,16 @@ export interface RailQueueEntry<T> {
   readonly opened: boolean;
 }
 
-type SinceInput = Pick<EnvironmentThreadShell, "latestRun" | "pendingUserInputAt" | "updatedAt">;
-type RunTimes = Pick<
-  NonNullable<EnvironmentThreadShell["latestRun"]>,
-  "completedAt" | "startedAt" | "requestedAt"
->;
-
-function parseMs(value: string | null | undefined): number | null {
-  if (!value) return null;
-  const ms = Date.parse(value);
-  return Number.isNaN(ms) ? null : ms;
-}
-
 /**
  * When a thread joined its list. A finished or failed run dates from its end, a running one
  * from its start, and a question from when it was asked. An approval carries no time of its
  * own, so it uses the thread's last update, which is when the approval arrived.
  */
-export function railQueueSinceMs(thread: SinceInput, state: RailQueueState): number {
-  const run: Partial<RunTimes> = thread.latestRun ?? {};
-  const own =
-    state === "needs"
-      ? parseMs(thread.pendingUserInputAt)
-      : state === "working"
-        ? (parseMs(run.startedAt) ?? parseMs(run.requestedAt))
-        : parseMs(run.completedAt);
-  return own ?? parseMs(thread.updatedAt) ?? 0;
+export function railQueueSinceMs(
+  thread: Parameters<typeof threadStatusSinceMs>[0],
+  state: RailQueueState,
+): number {
+  return threadStatusSinceMs(thread, state);
 }
 
 export function railQueueKind(state: RailQueueState): RailQueueKind {

@@ -123,7 +123,7 @@ export function ClearAllButton(props: { readonly section: string; readonly onCli
       type="button"
       aria-label={gt("Clear All {section}", { section: props.section })}
       onClick={props.onClick}
-      className="inline-flex h-4 cursor-pointer items-center gap-1 rounded-sm px-1 text-xs font-medium text-sidebar-muted-foreground outline-none transition-colors duration-100 hover:bg-sidebar-row-hover hover:text-sidebar-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset motion-reduce:transition-none"
+      className="inline-flex h-4 cursor-pointer items-center gap-1 rounded-sm px-1 text-xs font-medium text-success-foreground outline-none transition-colors duration-100 hover:bg-success/16 hover:text-success-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset motion-reduce:transition-none"
     >
       <CheckCheckIcon aria-hidden className="size-3" />
       <T>Clear All</T>
@@ -186,7 +186,7 @@ function QueueRow(props: {
           type="button"
           aria-label={gt("Clear {title}", { title: item.thread.title })}
           onClick={() => onClear(item)}
-          className="absolute top-1.5 right-1.5 inline-flex h-5 cursor-pointer items-center gap-1 rounded-md px-1.5 text-xs text-sidebar-muted-foreground opacity-0 outline-none transition-opacity duration-100 hover:bg-sidebar-row-hover hover:text-sidebar-foreground focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset group-hover/queue-row:opacity-100 motion-reduce:transition-none pointer-coarse:opacity-100"
+          className="absolute top-1.5 right-1.5 inline-flex h-5 cursor-pointer items-center gap-1 rounded-md px-1.5 text-xs text-success-foreground opacity-0 outline-none transition-opacity duration-100 hover:bg-success/16 hover:text-success-foreground focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset group-hover/queue-row:opacity-100 motion-reduce:transition-none pointer-coarse:opacity-100"
         >
           <CheckCheckIcon aria-hidden className="size-3" />
           <T>Clear</T>

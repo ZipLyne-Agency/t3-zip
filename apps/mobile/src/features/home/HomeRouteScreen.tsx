@@ -8,7 +8,6 @@ import { Platform } from "react-native";
 import { useGT, useMessages } from "gt-react-native";
 
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
-import { pickableProjectGroups } from "@t3tools/client-runtime/state/project-grouping";
 
 import { useProjects } from "../../state/entities";
 import { steadyNavigationThreadShellsAtom } from "../../state/threads";
@@ -27,11 +26,7 @@ import {
   useAtomValueWhileVisible,
   useHomeRouteVisible,
 } from "./home-route-visibility";
-import {
-  buildHomeProjectScopes,
-  resolveHomeProjectFilterScope,
-  sortHomeProjectScopes,
-} from "./homeThreadList";
+import { buildHomeProjectScopes, resolveHomeProjectFilterScope } from "./homeThreadList";
 import { usePendingTaskListActions } from "./usePendingTaskListActions";
 import { useThreadListActions } from "./useThreadListActions";
 import { useWorkspaceTabs } from "../layout/workspace/WorkspaceTabsContext";
@@ -42,7 +37,11 @@ import { WorkspaceListEmptyDetail } from "../layout/workspace/WorkspaceListEmpty
 import { WorkspaceListHeader } from "../layout/workspace/WorkspaceListHeader";
 import { buildHomeListFilterMenuItems, homeListFilterEnvironments } from "./home-list-filter-menu";
 
-export function HomeRouteScreen() {
+/**
+ * @param props.headerProjectSwitcher The screen header holds the project switcher (phone Home),
+ * so the list drops its own.
+ */
+export function HomeRouteScreen(props: { readonly headerProjectSwitcher: boolean }) {
   const gt = useGT();
   const m = useMessages();
   const nativePrimaryColumn = use(NativePrimaryColumnContext);
@@ -133,21 +132,6 @@ export function HomeRouteScreen() {
       ),
     [listOptions.projectGroupingMode, projects, selectedEnvironmentId, m],
   );
-  const projectFilterOptions = useMemo(
-    () =>
-      pickableProjectGroups(
-        sortHomeProjectScopes({
-          scopes: projectScopes,
-          threads,
-          pendingTasks: [],
-          projectSortOrder: "updated_at",
-        }),
-      ).map((scope) => ({
-        key: scope.key,
-        label: scope.title,
-      })),
-    [projectScopes, threads],
-  );
   const selectedProjectKey =
     resolveHomeProjectFilterScope(projectScopes, projects, listOptions)?.key ?? null;
 
@@ -167,22 +151,21 @@ export function HomeRouteScreen() {
         <WorkspaceListHeader
           accessibilityLabel={gt("T3 Code, Threads")}
           onOpenEnvironments={() => openSettings(navigation, "SettingsEnvironments")}
+          projectSwitcher={props.headerProjectSwitcher}
           search={{
             value: searchQuery,
             onChangeText: setSearchQuery,
             placeholder: gt("Search", { $context: "search field placeholder" }),
             accessibilityLabel: gt("Search threads"),
           }}
+          // The project switcher owns the project filter.
           filter={{
-            customized: selectedEnvironmentId !== null || selectedProjectKey !== null,
+            customized: selectedEnvironmentId !== null,
             items: buildHomeListFilterMenuItems(
               {
                 environments,
-                projects: projectFilterOptions,
                 selectedEnvironmentId,
-                selectedProjectKey,
                 onEnvironmentChange: setSelectedEnvironmentId,
-                onProjectChange: setSelectedProjectKey,
               },
               m,
             ),
@@ -230,6 +213,7 @@ export function HomeRouteScreen() {
           projects={projects}
           projectSortOrder={listOptions.projectSortOrder}
           savedConnectionsById={savedConnectionsById}
+          headerProjectSwitcher={props.headerProjectSwitcher}
           searchQuery={searchQuery}
           selectedEnvironmentId={selectedEnvironmentId}
           selectedProjectKey={selectedProjectKey}

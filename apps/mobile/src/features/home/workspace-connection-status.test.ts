@@ -76,6 +76,43 @@ describe("workspace connection status", () => {
     expect(workspaceConnectionStatusPresentation(state)).toEqual({
       label: "Syncing threads...",
       showsProgress: true,
+      connectionTrouble: false,
     });
+  });
+
+  it("marks offline, reconnecting and failing as connection trouble, and loading as not", () => {
+    const trouble = (overrides: Partial<WorkspaceState>) =>
+      workspaceConnectionStatusPresentation(workspaceState(overrides))?.connectionTrouble;
+
+    expect(trouble({ networkStatus: "offline" })).toBe(true);
+    expect(
+      trouble({
+        hasReadyEnvironment: false,
+        hasConnectingEnvironment: true,
+        connectingEnvironments: [
+          {
+            environmentId: "environment-1" as never,
+            environmentLabel: "Laptop",
+            displayUrl: "",
+            isRelayManaged: false,
+            isEnabled: true,
+            connectionState: "reconnecting",
+            connectionError: null,
+            connectionErrorTraceId: null,
+          },
+        ],
+      }),
+    ).toBe(true);
+    expect(trouble({ hasReadyEnvironment: false, connectionError: "Could not reach laptop" })).toBe(
+      true,
+    );
+    expect(trouble({ hasReadyEnvironment: false, hasLoadedShellSnapshot: true })).toBe(true);
+    expect(
+      trouble({
+        hasReadyEnvironment: false,
+        hasLoadedShellSnapshot: false,
+        hasPendingShellSnapshot: true,
+      }),
+    ).toBe(false);
   });
 });

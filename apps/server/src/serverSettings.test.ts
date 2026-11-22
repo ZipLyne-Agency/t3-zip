@@ -2,6 +2,7 @@ import { deriveProviderInstanceConfigMap } from "./provider/ProviderInstanceRegi
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
+  AuthSettingsWriteScope,
   DEFAULT_SERVER_SETTINGS,
   globalIdleCompaction,
   type ManagedPolicyDocument,
@@ -11,6 +12,7 @@ import {
   ProviderDriverKind,
   type ProviderInstanceEnvironment,
   ProviderInstanceId,
+  requiredScopesForServerSettingsPatch,
   resolveProviderInstanceEnabled,
   SecretProviderId,
   ServerSettings,
@@ -218,6 +220,60 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("server settings"
         const migrated = yield* service.updateSettings({ migrateModelPreferences: patch });
         assert.deepEqual(migrated.favorites, []);
         assert.deepEqual(migrated.providerModelPreferences, {});
+      }),
+    ).pipe(Effect.provide(layerServerSettings())),
+  );
+  // T3 Zip: the project rail the desktop and the phone share.
+  it.effect("persists, broadcasts and replaces the shared project rail whole", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const service = yield* ServerSettingsModule.ServerSettingsService;
+        const config = yield* ServerConfig.ServerConfig;
+        const fs = yield* FileSystem.FileSystem;
+        assert.strictEqual((yield* service.getSettings).projectRail, undefined);
+        const first = {
+          layout: {
+            top: ["f:work", "f:home", "p:blog"],
+            folders: {
+              work: { name: "Work", projects: ["shop", "crm"] },
+              home: { name: "Home", projects: ["site"] },
+            },
+          },
+          favoriteProjects: ["blog"],
+          hiddenProjects: ["crm"],
+          snoozedProjects: { shop: "2026-11-23T09:00:00.000Z", site: "9999-12-31T23:59:59.000Z" },
+          updatedAt: "2026-11-22T10:00:00.000Z",
+        };
+        const changes = yield* service.subscribeChanges;
+        yield* service.updateSettings({ projectRail: first });
+        const received = Option.getOrThrow(yield* Stream.runHead(changes));
+        assert.deepEqual(received.projectRail, first);
+        assert.deepEqual(
+          (yield* decodeServerSettingsJson(yield* fs.readFileString(config.settingsPath)))
+            .projectRail,
+          first,
+        );
+        // A folder removed and a snooze woken must not survive a merge with the saved value.
+        const second = {
+          layout: {
+            top: ["f:work", "p:blog", "p:site"],
+            folders: { work: first.layout.folders.work },
+          },
+          favoriteProjects: [],
+          hiddenProjects: ["crm"],
+          snoozedProjects: { shop: "2026-11-23T09:00:00.000Z" },
+          updatedAt: "2026-11-22T11:00:00.000Z",
+        };
+        const updated = yield* service.updateSettings({ projectRail: second });
+        assert.deepEqual(updated.projectRail, second);
+        assert.deepEqual(
+          (yield* decodeServerSettingsJson(yield* fs.readFileString(config.settingsPath)))
+            .projectRail,
+          second,
+        );
+        assert.deepEqual(requiredScopesForServerSettingsPatch({ projectRail: second }), [
+          AuthSettingsWriteScope,
+        ]);
       }),
     ).pipe(Effect.provide(layerServerSettings())),
   );

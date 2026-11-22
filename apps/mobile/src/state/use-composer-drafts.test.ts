@@ -199,6 +199,7 @@ import {
   subscribeComposerDraftModelReconciliation,
   clearComposerDraftsEnvironment,
   ComposerDraftPersistenceError,
+  composerDraftHasContentAtom,
   composerDraftsAtom,
   composerCloudDraftsAtom,
   createNewTaskDraft,
@@ -436,6 +437,33 @@ function modelReconciliationHarness(
     model: () => registry.get(shells.threadShellAtom({ environmentId, threadId }))!.modelSelection,
   };
 }
+
+describe("thread unsent-draft marker", () => {
+  it("follows one thread's draft content and ignores other threads and settings", () => {
+    const key = "environment-1:thread-1";
+    const marker = composerDraftHasContentAtom(key);
+    const changes: boolean[] = [];
+    const unsubscribe = appAtomRegistry.subscribe(marker, (value) => changes.push(value));
+    try {
+      appAtomRegistry.set(composerDraftsAtom, {});
+      expect(appAtomRegistry.get(marker)).toBe(false);
+      setComposerDraftText(key, "Fix the");
+      setComposerDraftText(key, "Fix the login");
+      expect(appAtomRegistry.get(marker)).toBe(true);
+      // Typing in another thread leaves this row's marker untouched.
+      setComposerDraftText("environment-1:thread-2", "Other");
+      setComposerDraftText(key, "   ");
+      expect(appAtomRegistry.get(marker)).toBe(false);
+      updateComposerDraftSettings(key, { runtimeMode: "full-access" });
+      expect(appAtomRegistry.get(marker)).toBe(false);
+      // Each change notifies once, not once per keystroke or per other thread's edit.
+      expect(changes).toEqual([true, false]);
+    } finally {
+      unsubscribe();
+      appAtomRegistry.set(composerDraftsAtom, {});
+    }
+  });
+});
 
 describe("mobile composer drafts", () => {
   it.each([false, true])(

@@ -64,6 +64,9 @@ import { useThreadSearch } from "../../state/queries";
 import { requestThreadMessageJump } from "../threads/threadMessageJump";
 import { useThreadListSearchMatches } from "../threads/useThreadListSearchMatches";
 import { useThreadListV2 } from "../threads/useThreadListV2";
+import { ThreadStatusFilterBar, ThreadStatusSectionHeader } from "../threads/ThreadStatusFilterBar";
+import { threadStatusDoneThreads } from "../threads/threadStatusFilterList";
+import { useThreadStatusFilter } from "../threads/use-thread-status-filter";
 import { useSidebarRowThreadKey } from "../threads/useSidebarRowThreadKey";
 import { useThreadListNow } from "../threads/use-thread-list-now";
 import { useSearchScrollRestoration } from "../layout/workspace/useSearchScrollRestoration";
@@ -94,6 +97,7 @@ import type { HomeListFilterMenuEnvironment } from "./home-list-filter-menu";
 import {
   buildHomeProjectScopes,
   findHomeProjectScope,
+  homeProjectScopeActivity,
   type HomeProjectSortOrder,
   sortHomeProjectScopes,
 } from "./homeThreadList";
@@ -102,7 +106,10 @@ import { SwipeableScrollGateProvider, useSwipeableScrollGate } from "./thread-sw
 import { useFabScroll } from "./FabScrollContext";
 import { holdLaunchSplashForHomeRows, settleLaunchSplashHomeRows } from "./home-launch-splash";
 import { useWorkspaceTabs } from "../layout/workspace/WorkspaceTabsContext";
-import { ThreadListFilters } from "./ThreadListFilters";
+import { ProjectSwitcher } from "./ProjectSwitcher";
+import { HomeHeaderProjectSwitcherHost } from "./HomeHeaderProjectSwitcher";
+import { buildProjectSwitcherRows } from "./project-switcher";
+import { useProjectDrawer } from "./useProjectDrawer";
 import { deriveHomeEmptyState } from "./home-empty-state";
 
 interface HomeScreenProps {
@@ -117,6 +124,8 @@ interface HomeScreenProps {
     HomeListFilterMenuEnvironment & Pick<WorkspaceEnvironment, "connectionState">
   >;
   readonly searchQuery: string;
+  /** The screen header holds the project switcher (phone Home), so the list drops its own. */
+  readonly headerProjectSwitcher: boolean;
   readonly selectedEnvironmentId: EnvironmentId | null;
   readonly selectedProjectKey: string | null;
   readonly projectSortOrder: HomeProjectSortOrder;
@@ -339,6 +348,11 @@ export function HomeScreen(props: HomeScreenProps) {
       ),
     [projects, selectedEnvironmentId, projectGroupingMode, m],
   );
+  // Every environment's scopes, to place a sent message's project whatever the filter.
+  const allProjectScopes = useMemo(
+    () => buildHomeProjectScopes({ projects, environmentId: null, projectGroupingMode }, m),
+    [projects, projectGroupingMode, m],
+  );
   const hasSearchQuery = props.searchQuery.trim().length > 0;
   const projectByKey = (() => {
     const map = new Map<string, EnvironmentProject>();
@@ -421,10 +435,20 @@ export function HomeScreen(props: HomeScreenProps) {
   const resolveProviderInstance = useThreadRowProviderInstanceResolver(providersByEnvironmentId);
   const pendingOrder = usePendingThreadOrder();
   const {
+    statusFilter,
+    setStatusFilter,
+    clears: doneClears,
+    clearFromDone,
+  } = useThreadStatusFilter();
+  const {
     layout: threadListV2Layout,
     items: threadListV2Items,
     contentOnlyThreadKeys,
     olderSettledShelf,
+    statusEntries,
+    environmentStatusEntries,
+    statusCounts,
+    appliedStatusFilter,
   } = useThreadListV2({
     threads: props.threads,
     pendingTasks: props.pendingTasks,
@@ -447,7 +471,23 @@ export function HomeScreen(props: HomeScreenProps) {
     snoozedShelfExpanded,
     settledShelfExpanded,
     selectedThreadKey,
+    statusFilter,
+    doneClears,
   });
+  const clearThreadFromDone = (thread: EnvironmentThreadShell) => {
+    const key = scopedThreadKey(thread.environmentId, thread.id);
+    const entry = statusEntries.find(
+      (candidate) => scopedThreadKey(candidate.thread.environmentId, candidate.thread.id) === key,
+    );
+    clearFromDone([{ thread, unread: entry?.doneSection === "new" }]);
+  };
+  const clearAllFromDone = () =>
+    clearFromDone(
+      threadStatusDoneThreads(statusEntries).map((entry) => ({
+        thread: entry.thread,
+        unread: entry.doneSection === "new",
+      })),
+    );
   // Called as `props.onSelectThread(...)`, the compiler would cache this handler on the whole
   // props object, which is new on every render of Home's parent.
   const { onSelectThread } = props;
@@ -463,7 +503,7 @@ export function HomeScreen(props: HomeScreenProps) {
     }
     onSelectThread(thread);
   };
-  useThreadJumpShortcuts(threadListV2Items, selectThread);
+  useThreadJumpShortcuts(threadListV2Items, selectThread, props.onSelectPendingTask);
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- reads the list's visible range after commit to enable swipe gestures on those rows
   useEffect(() => {
     if (swipeEnabled) activateVisibleRows(threadListV2Items);
@@ -525,6 +565,17 @@ export function HomeScreen(props: HomeScreenProps) {
         />
       );
     }
+    if (item.type === "v2-status-section") {
+      return (
+        <ThreadStatusSectionHeader
+          section={item.section}
+          count={item.count}
+          clearAllCount={item.clearAllCount}
+          onClearAll={clearAllFromDone}
+          pane={sidebarSurface ? "sidebar" : "screen"}
+        />
+      );
+    }
     if (item.type === "v2-settled-shelf") {
       return (
         <ThreadListV2SettledShelfHeader
@@ -576,6 +627,7 @@ export function HomeScreen(props: HomeScreenProps) {
         onOpenThreadPullRequests={handleOpenThreadPullRequests}
         onDeleteThread={handleDeleteThread}
         onArchiveThread={props.onArchiveThread}
+        onClearFromDone={item.doneSection ? clearThreadFromDone : undefined}
         onRenameThread={handleRenameThread}
         onRegenerateThreadTitle={handleRegenerateThreadTitle}
         titleRegenerationSupported={titleRegenerationEnvironmentIds.has(thread.environmentId)}
@@ -640,6 +692,61 @@ export function HomeScreen(props: HomeScreenProps) {
         "this environment");
   const emptyState = deriveHomeEmptyState(props.catalogState, props.projects.length, m);
 
+  // Most recently active first; threads with no project get their own row above them.
+  const projectActivityInput = {
+    scopes: pickableProjectGroups(projectScopes),
+    threads: props.threads,
+    pendingTasks: [],
+    projectSortOrder: "updated_at",
+  } as const;
+  const pickableScopes = sortHomeProjectScopes(projectActivityInput);
+  const noProjectScope = pickableScopes.find((scope) => scope.representative.isScratch) ?? null;
+  const projectSwitcherRows = buildProjectSwitcherRows({
+    scopes: pickableScopes,
+    noProjectKey: noProjectScope?.key ?? null,
+    entries: environmentStatusEntries,
+    activityByScope: homeProjectScopeActivity(projectActivityInput),
+    allTitle: gt("All Projects"),
+    noProjectTitle: gt("No Project"),
+  });
+  // iOS Home has no environment menu, so an environment picked on another layout clears from
+  // the drawer. Android's filter menu clears it.
+  const clearEnvironmentFilter =
+    Platform.OS === "ios" && props.selectedEnvironmentId !== null
+      ? () => props.onEnvironmentChange(null)
+      : undefined;
+  const projectDrawer = useProjectDrawer({
+    rows: projectSwitcherRows,
+    scopes: pickableScopes,
+    allScopes: allProjectScopes,
+    threads: props.threads,
+    environmentId: props.selectedEnvironmentId,
+    selectedKey: v2ScopedProjectGroup?.key ?? null,
+    now,
+    settlementEnvironmentIds,
+    snoozePresetsByEnvironmentId,
+    onPick: props.onProjectChange,
+    onClearEnvironmentFilter: clearEnvironmentFilter,
+    onNewThreadInProject: props.onNewThreadInProject,
+    onSelectThread: selectThread,
+    onUnsnoozeThread: handleUnsnoozeThread,
+    onSetThreadMuted: handleSetThreadMuted,
+    onUnsettleThread: handleUnsettleThread,
+  });
+  // Every branch below renders this, so the header names the project even with an empty list.
+  const headerProjectSwitcherHost = props.headerProjectSwitcher ? (
+    <HomeHeaderProjectSwitcherHost drawer={projectDrawer} />
+  ) : null;
+  const projectSwitcherGutter = sidebarSurface ? 8 : 0;
+  const projectSwitcher = props.headerProjectSwitcher ? null : (
+    <View
+      className="flex-row items-center pb-2.5 pt-0.5"
+      style={{ marginHorizontal: -projectSwitcherGutter, paddingHorizontal: 20 }}
+    >
+      <ProjectSwitcher drawer={projectDrawer} />
+    </View>
+  );
+
   if (!hasAnyThreads) {
     return (
       <View className={containerClassName}>
@@ -684,40 +791,37 @@ export function HomeScreen(props: HomeScreenProps) {
             </View>
           </View>
         </ScreenContent>
+        {headerProjectSwitcherHost}
       </View>
     );
   }
 
-  const listHeader = Platform.OS === "ios" ? undefined : <HomeTopContentSpacer />;
+  // iOS: with the switcher in the header, a small gap keeps the first item off the bar.
+  const listHeader =
+    Platform.OS !== "ios" ? (
+      <HomeTopContentSpacer />
+    ) : props.headerProjectSwitcher ? (
+      <View className="h-1" />
+    ) : undefined;
 
   const v2ListHeader = (
     <>
       {listHeader}
-      {Platform.OS === "ios" && workspace ? (
-        <ThreadListFilters
-          gutter={sidebarSurface ? 8 : 0}
-          environments={props.environments}
-          projects={pickableProjectGroups(
-            sortHomeProjectScopes({
-              scopes: projectScopes,
-              threads: props.threads,
-              pendingTasks: [],
-              projectSortOrder: "updated_at",
-            }),
-          ).map((scope) => ({
-            key: scope.key,
-            label: scope.title,
-          }))}
-          selectedEnvironmentId={props.selectedEnvironmentId}
-          selectedProjectKey={props.selectedProjectKey}
-          onEnvironmentChange={props.onEnvironmentChange}
-          onProjectChange={props.onProjectChange}
+      {projectSwitcher}
+      {hasSearchQuery ? null : (
+        <ThreadStatusFilterBar
+          selected={statusFilter}
+          counts={statusCounts}
+          openCount={statusEntries.length}
+          onSelect={setStatusFilter}
+          pane={sidebarSurface ? "sidebar" : "screen"}
         />
-      ) : null}
+      )}
     </>
   );
 
-  const v2ListEmpty =
+  // The card variant draws an edge, so it keeps the list's side gutter.
+  const v2ListEmptyState =
     hasSearchQuery && threadSearch.isPending ? (
       <EmptyState
         title={gt("Searching thread messages…")}
@@ -736,6 +840,24 @@ export function HomeScreen(props: HomeScreenProps) {
       <EmptyState
         title={gt("No results")}
         detail={gt('No threads matching "{query}".', { query: props.searchQuery })}
+        variant={Platform.OS === "android" ? "plain" : undefined}
+      />
+    ) : appliedStatusFilter === "waiting" ? (
+      <EmptyState
+        title={gt("Nothing is waiting for you.")}
+        detail={gt("Questions, approvals and failed runs show up here.")}
+        variant={Platform.OS === "android" ? "plain" : undefined}
+      />
+    ) : appliedStatusFilter === "working" ? (
+      <EmptyState
+        title={gt("Nothing is running right now.")}
+        detail={gt("Threads show up here while they work.")}
+        variant={Platform.OS === "android" ? "plain" : undefined}
+      />
+    ) : appliedStatusFilter === "done" ? (
+      <EmptyState
+        title={gt("No finished threads to check.")}
+        detail={gt("Finished threads stay here until you clear them.")}
         variant={Platform.OS === "android" ? "plain" : undefined}
       />
     ) : v2ScopedProjectGroup !== null ? (
@@ -758,15 +880,24 @@ export function HomeScreen(props: HomeScreenProps) {
       />
     );
 
-  if (Platform.OS === "android" && threadListV2Items.length === 0) {
+  // A filter that lists nothing keeps its bar, so the list itself shows the empty state.
+  const v2ListEmpty = <View className="px-5">{v2ListEmptyState}</View>;
+
+  if (
+    Platform.OS === "android" &&
+    threadListV2Items.length === 0 &&
+    appliedStatusFilter === "all"
+  ) {
     return (
       <ScreenContent surface="screen">
         <View
-          className="flex-1 items-center justify-center px-4"
-          style={{ paddingBottom: insets.bottom }}
+          className="flex-1"
+          style={{ paddingBottom: insets.bottom, paddingHorizontal: androidListGutter }}
         >
-          {v2ListEmpty}
+          <HomeTopContentSpacer />
+          <View className="flex-1 items-center justify-center px-4">{v2ListEmpty}</View>
         </View>
+        {headerProjectSwitcherHost}
       </ScreenContent>
     );
   }
@@ -798,10 +929,10 @@ export function HomeScreen(props: HomeScreenProps) {
                 recycleItems
                 extraData={v2ExtraData}
                 ListHeaderComponent={v2ListHeader}
-                // Lifted above the rows so an iOS filter menu's dismissal morph is not covered.
-                ListHeaderComponentStyle={{ zIndex: 1 }}
                 ListFooterComponent={
-                  settledShelfExpanded && threadListV2Layout.hiddenSettledCount > 0 ? (
+                  appliedStatusFilter === "all" &&
+                  settledShelfExpanded &&
+                  threadListV2Layout.hiddenSettledCount > 0 ? (
                     <ThreadListV2ShowMoreRow
                       hiddenCount={threadListV2Layout.hiddenSettledCount}
                       {...(olderSettledShelf.loading
@@ -846,6 +977,7 @@ export function HomeScreen(props: HomeScreenProps) {
           </SwipeableScrollGateProvider>
         </View>
       </ScreenContent>
+      {headerProjectSwitcherHost}
     </View>
   );
 }

@@ -6,6 +6,7 @@ import { BackHandler, Keyboard } from "react-native";
 import { AppBar } from "../../../components/ui/AppBar";
 import { useWorkspaceConnectionState } from "../../../state/workspace";
 import { useHardwareKeyboardCommand } from "../../keyboard/hardwareKeyboardCommands";
+import { HomeHeaderProjectSwitcher } from "../../home/HomeHeaderProjectSwitcher";
 import { WorkspaceBrandTitle } from "./WorkspaceBrandTitle";
 import { useWorkspaceTabs } from "./WorkspaceTabsContext";
 import {
@@ -62,10 +63,14 @@ export function WorkspaceListHeader(props: WorkspaceListHeaderProps) {
     <AppBar
       title="T3 Code"
       titleContent={
-        <WorkspaceBrandTitle
-          accessibilityLabel={props.accessibilityLabel}
-          onOpenEnvironments={props.onOpenEnvironments}
-        />
+        props.projectSwitcher ? (
+          <HomeHeaderProjectSwitcher onOpenEnvironments={props.onOpenEnvironments} />
+        ) : (
+          <WorkspaceBrandTitle
+            accessibilityLabel={props.accessibilityLabel}
+            onOpenEnvironments={props.onOpenEnvironments}
+          />
+        )
       }
       search={{
         value: search.value,

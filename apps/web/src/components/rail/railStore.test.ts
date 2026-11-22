@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 
+import { setRailFolderCollapsed } from "./railLayout.logic";
 import { useProjectRailStore } from "./railStore";
 
 describe("useProjectRailStore", () => {
@@ -106,5 +107,88 @@ describe("useProjectRailStore", () => {
     const merge = useProjectRailStore.persist.getOptions().merge!;
     const current = useProjectRailStore.getState();
     expect(merge("corrupt", current).layout).toEqual(current.layout);
+  });
+
+  it("marks a change to the shared fields for sending, but not folding a folder", () => {
+    const store = useProjectRailStore.getState();
+    store.replaceLayout({
+      top: ["f:work"],
+      folders: { work: { name: "Work", collapsed: false, projects: ["a"] } },
+    });
+    store.confirmSharedRail("2026-11-22T10:00:00.000Z");
+    useProjectRailStore.getState().revealProject("a");
+    useProjectRailStore
+      .getState()
+      .updateLayout(["a"], (layout) => setRailFolderCollapsed(layout, "work", true));
+    expect(useProjectRailStore.getState().sharedPendingSince).toBeNull();
+    useProjectRailStore.getState().setFilter("waiting");
+    expect(useProjectRailStore.getState().sharedPendingSince).toBeNull();
+    useProjectRailStore.getState().hideProject("a");
+    expect(useProjectRailStore.getState().sharedPendingSince).not.toBeNull();
+  });
+
+  it("takes the server's rail without marking it for sending, keeping this device's folding", () => {
+    const store = useProjectRailStore.getState();
+    store.replaceLayout({
+      top: ["f:work"],
+      folders: { work: { name: "Work", collapsed: true, projects: ["a"] } },
+    });
+    store.adoptSharedRail({
+      layout: {
+        top: ["f:work", "f:home"],
+        folders: {
+          work: { name: "Work", projects: ["a", "b"] },
+          home: { name: "Home", projects: ["c"] },
+        },
+      },
+      favoriteProjects: ["c"],
+      hiddenProjects: [],
+      snoozedProjects: { b: "2026-11-23T00:00:00.000Z" },
+      updatedAt: "2026-11-22T10:00:00.000Z",
+    });
+    const state = useProjectRailStore.getState();
+    expect(state.sharedPendingSince).toBeNull();
+    expect(state.sharedBaseUpdatedAt).toBe("2026-11-22T10:00:00.000Z");
+    expect(state.layout.folders.work).toEqual({
+      name: "Work",
+      collapsed: true,
+      projects: ["a", "b"],
+    });
+    expect(state.layout.folders.home?.collapsed).toBe(false);
+    expect(state.favoriteProjects).toEqual(["c"]);
+    expect(state.snoozedProjects).toEqual({ b: "2026-11-23T00:00:00.000Z" });
+  });
+
+  it("treats a rail saved before syncing as an edit, so it seeds the server", () => {
+    const merge = useProjectRailStore.persist.getOptions().merge!;
+    const current = {
+      ...useProjectRailStore.getState(),
+      favoriteProjects: [],
+      hiddenProjects: [],
+      snoozedProjects: {},
+    };
+    const saved = {
+      layout: { top: ["p:a"], folders: {} },
+      noProjectPosition: "top",
+      lastThreadByProject: {},
+    };
+    expect(merge(saved, current).sharedPendingSince).not.toBeNull();
+    expect(
+      merge({ ...saved, layout: { top: [], folders: {} } }, current).sharedPendingSince,
+    ).toBeNull();
+    expect(merge({ ...saved, sharedPendingSince: null }, current).sharedPendingSince).toBeNull();
+  });
+
+  it("stamps an edit after a server value from a clock running ahead", () => {
+    const store = useProjectRailStore.getState();
+    store.adoptSharedRail({
+      layout: { top: ["p:a"], folders: {} },
+      favoriteProjects: [],
+      hiddenProjects: [],
+      snoozedProjects: {},
+      updatedAt: "2099-01-01T00:00:00.000Z",
+    });
+    useProjectRailStore.getState().setProjectFavorite("a", true);
+    expect(useProjectRailStore.getState().sharedPendingSince).toBe("2099-01-01T00:00:00.001Z");
   });
 });

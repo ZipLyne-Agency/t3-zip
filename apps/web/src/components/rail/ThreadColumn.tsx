@@ -217,6 +217,9 @@ function HeaderButton(props: {
 /** The row's one hover action, over its time: Settle, or Clear under Done. */
 const HOVER_ACTION_CLASS_NAME =
   "absolute top-1.5 right-1.5 inline-flex h-5 cursor-pointer items-center gap-1 rounded-md px-1.5 text-xs text-sidebar-muted-foreground opacity-0 outline-none transition-opacity duration-100 hover:bg-sidebar-row-hover hover:text-sidebar-foreground focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset group-hover/column-row:opacity-100 motion-reduce:transition-none pointer-coarse:opacity-100";
+/** Clear from Done is green, like the Done chip and the phone app, so it never reads as Settle. */
+const CLEAR_ACTION_CLASS_NAME =
+  "absolute top-1.5 right-1.5 inline-flex h-5 cursor-pointer items-center gap-1 rounded-md px-1.5 text-xs text-success-foreground opacity-0 outline-none transition-opacity duration-100 hover:bg-success/16 hover:text-success-foreground focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset group-hover/column-row:opacity-100 motion-reduce:transition-none pointer-coarse:opacity-100";
 
 function ColumnRow(props: {
   readonly entry: ColumnEntry;
@@ -394,7 +397,7 @@ function ColumnRow(props: {
                 type="button"
                 aria-label={gt("Clear {title}", { title: tab.title })}
                 onClick={props.onClear}
-                className={HOVER_ACTION_CLASS_NAME}
+                className={CLEAR_ACTION_CLASS_NAME}
               />
             }
           >

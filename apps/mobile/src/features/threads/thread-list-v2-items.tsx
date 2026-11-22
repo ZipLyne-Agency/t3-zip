@@ -91,6 +91,9 @@ import {
   type ThreadListV2Status,
 } from "./threadListV2";
 import { QueuedMessageIcon } from "./queued-message-icon";
+import { UnsentDraftMarker } from "./unsent-draft-marker";
+import { scopedThreadKey } from "../../lib/scopedEntities";
+import { useComposerDraftHasContent } from "../../state/use-composer-drafts";
 import { shouldRecedeThreadRow } from "./thread-row-emphasis";
 import { ThreadSearchMatchExcerpt } from "./thread-search-match";
 import { useScaledTextRole } from "../settings/appearance/useScaledTextRole";
@@ -775,6 +778,8 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   readonly onUnsnoozeThread: (thread: EnvironmentThreadShell) => void;
   readonly onUnsettleThread: (thread: EnvironmentThreadShell) => void;
   readonly onArchiveThread: (thread: EnvironmentThreadShell) => void;
+  /** Set when the Done filter lists this row: swiping clears it from Done instead of settling. */
+  readonly onClearFromDone?: (thread: EnvironmentThreadShell) => void;
   readonly onPinThread: (thread: EnvironmentThreadShell) => void;
   readonly onUnpinThread: (thread: EnvironmentThreadShell) => void;
   readonly onSetThreadAutoSettle: (thread: EnvironmentThreadShell, enabled: boolean) => void;
@@ -873,6 +878,9 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   const sidebarPane = props.pane === "sidebar";
   const selected = props.selected === true;
   const rowAppearance = getThreadListV2RowAppearance(theme, sidebarPane, selected);
+  // The open thread's composer already shows its draft, so only the other rows mark one.
+  const hasUnsentDraft =
+    useComposerDraftHasContent(scopedThreadKey(thread.environmentId, thread.id)) && !selected;
 
   const rawStatus = resolveThreadListV2Status(thread);
   const status = resolveThreadListV2RowStatus(thread);
@@ -912,6 +920,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
       snoozeWakeLabel: snoozedRow ? snoozeWakeLabelText : undefined,
       providerNameLabel,
       hasQueuedMessages: props.hasQueuedMessages === true,
+      hasUnsentDraft,
       regeneratingTitle: isRegeneratingTitle,
     },
     m,
@@ -974,6 +983,11 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   const handleMoveUp = useCallback(() => onMoveThread?.(thread, "up"), [onMoveThread, thread]);
   const handleMoveDown = useCallback(() => onMoveThread?.(thread, "down"), [onMoveThread, thread]);
   const handleArchive = useCallback(() => onArchiveThread(thread), [onArchiveThread, thread]);
+  const onClearFromDone = props.onClearFromDone;
+  const handleClearFromDone = useCallback(
+    () => onClearFromDone?.(thread),
+    [onClearFromDone, thread],
+  );
 
   const canUnsettle = variant === "slim";
   // The gate's only time-dependent edge is the queued-turn grace window, so its
@@ -1169,6 +1183,15 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
       ...(canShareWithGuest
         ? [{ id: "share-guest", title: gt("Share with guest"), image: "person.badge.plus" }]
         : []),
+      ...(onClearFromDone
+        ? [
+            {
+              id: "clear-done",
+              title: gt("Clear from Done", { $context: "verb, thread action" }),
+              image: "tray.and.arrow.up",
+            },
+          ]
+        : []),
     ];
     if (snoozedRow) {
       return layoutThreadListV2RowMenuActions(
@@ -1250,6 +1273,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
     threadSettingMenuItems,
     canShareWithGuest,
     canUnsettle,
+    onClearFromDone,
     pinMenuItems,
     props.settlementSupported,
     reorderMenuItems,
@@ -1265,6 +1289,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
     ({ nativeEvent }: { readonly nativeEvent: { readonly event: string } }) => {
       if (nativeEvent.event === "new-thread-on-branch") onNewThreadOnBranch(thread);
       if (nativeEvent.event === "settle") handleSettle();
+      if (nativeEvent.event === "clear-done") handleClearFromDone();
       if (nativeEvent.event === "unsettle") handleUnsettle();
       if (nativeEvent.event === "unsnooze") handleUnsnooze();
       if (nativeEvent.event === "pin") handlePin();
@@ -1354,6 +1379,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
       thread,
       navigation,
       handleArchive,
+      handleClearFromDone,
       handleDelete,
       handleRegenerateTitle,
       handleRename,
@@ -1376,6 +1402,17 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
     ],
   );
   const primaryAction = useMemo(() => {
+    if (onClearFromDone) {
+      return {
+        accessibilityLabel: gt("Clear {title} from Done", { title: thread.title }),
+        icon: "tray.and.arrow.up" as const,
+        label: gt("Clear", { $context: "verb, clear a finished thread from Done" }),
+        clear: true,
+        swipeHint: gt("Opens the thread. Swipe left to clear it from Done."),
+        swipeSnoozeHint: gt("Opens the thread. Swipe left for clear and snooze actions."),
+        onPress: handleClearFromDone,
+      };
+    }
     if (swipeActions.primary === "archive") {
       return {
         accessibilityLabel: gt("Archive {title}", { title: thread.title }),
@@ -1416,6 +1453,8 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   }, [
     gt,
     handleArchive,
+    handleClearFromDone,
+    onClearFromDone,
     handleSettle,
     handleUnsettle,
     handleUnsnooze,
@@ -1485,6 +1524,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
           {thread.title}
         </Text>
         <View className="flex-row items-center gap-1.5" style={{ minHeight: titleLineHeight }}>
+          <UnsentDraftMarker visible={hasUnsentDraft} />
           {props.hasQueuedMessages ? <QueuedMessageIcon selected={selected} /> : null}
           {pinnedRow ? (
             <SymbolView
@@ -1817,6 +1857,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
               />
             ) : null}
           </View>
+          <UnsentDraftMarker visible={hasUnsentDraft} />
           {props.hasQueuedMessages ? <QueuedMessageIcon selected={selected} /> : null}
           <Text
             className={cn(

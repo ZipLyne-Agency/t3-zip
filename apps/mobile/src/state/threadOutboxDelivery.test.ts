@@ -860,6 +860,11 @@ describe("thread outbox recovery rollback", () => {
       );
       expect(imageRecord).toBeDefined();
       expect(restored.text).toContain(`/${imageRecord!.contextId})`);
+      // Stamped with the failed creation's project, so the home list shows it as a draft.
+      expect(restored.project).toMatchObject({
+        environmentId: message.environmentId,
+        projectId: ProjectId.make("project-1"),
+      });
       expect(composerDrafts.getComposerDraftSnapshot(sourceKey).attachments).toEqual([]);
     } finally {
       resume.resolve();

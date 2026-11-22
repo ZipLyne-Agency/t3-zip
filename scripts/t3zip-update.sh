@@ -777,16 +777,33 @@ cmd_sync() {
   follow_companions "$prev" "$merged"
 }
 
-# The T3 Zip iPhone app and relay follow the same branch. An update that touched the app (or
-# the packages it uses) ships a TestFlight build; one that touched the relay raises a notice,
-# since deploying the relay stays a deliberate step (scripts/t3zip-relay.sh deploy).
-# T3ZIP_IOS_NIGHTLY=0 in t3zip.local.env turns the iPhone build off.
+# The T3 Zip iPhone app and relay follow the same branch, the way regular T3's relay and apps
+# move together. An update that touched the app (or the packages it uses) ships a TestFlight
+# build; one that touched the relay deploys it (migrations included), so the relay never falls
+# behind the apps it serves. Isaac chose this on 2026-11-21. A failed deploy raises a notice.
+# T3ZIP_IOS_NIGHTLY=0 and T3ZIP_RELAY_NIGHTLY=0 in t3zip.local.env turn either step off.
 readonly IOS_LOG="$HOME/Library/Logs/t3zip-ios.log"
+readonly RELAY_LOG="$HOME/Library/Logs/t3zip-relay.log"
 follow_companions() {
   local from="$1" to="$2"
   if [[ -x "$REPO/scripts/t3zip-relay.sh" ]] && ! git diff --quiet "$from" "$to" -- infra/relay; then
-    notify "t3zip-relay-changed" \
-      "This update changed the T3 Connect relay. Deploy it with scripts/t3zip-relay.sh deploy."
+    if [[ "${T3ZIP_RELAY_NIGHTLY:-1}" != "1" ]]; then
+      notify "t3zip-relay-changed" \
+        "This update changed the T3 Connect relay. Deploy it with scripts/t3zip-relay.sh deploy."
+    elif [[ "$DRY_RUN" == "1" ]]; then
+      log "dry run: would deploy the relay"
+    else
+      log "deploying the T3 Connect relay"
+      # deploy-rest leaves out the stack's API token, which needs an interactive Cloudflare login
+      # and does not change with relay code.
+      if "$REPO/scripts/t3zip-relay.sh" migrate >>"$RELAY_LOG" 2>&1 \
+        && "$REPO/scripts/t3zip-relay.sh" deploy-rest >>"$RELAY_LOG" 2>&1; then
+        log "relay deployed"
+      else
+        notify "t3zip-relay-failed" \
+          "The relay deploy failed, so it may lag the apps. Log: $RELAY_LOG. Retry: scripts/t3zip-relay.sh deploy"
+      fi
+    fi
   fi
   if [[ "${T3ZIP_IOS_NIGHTLY:-1}" == "1" && -x "$REPO/scripts/t3zip-ios.sh" ]] && ! git diff --quiet "$from" "$to" -- apps/mobile packages; then
     log "building the iPhone app for TestFlight"

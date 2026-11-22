@@ -7,6 +7,8 @@ import type { WorkspaceState } from "../../state/workspaceModel";
 export interface WorkspaceConnectionStatusPresentation {
   readonly label: string;
   readonly showsProgress: boolean;
+  /** Offline, reconnecting or failing; false while the shell only loads or syncs threads. */
+  readonly connectionTrouble: boolean;
 }
 
 function shouldShowWorkspaceConnectionStatus(state: WorkspaceState): boolean {
@@ -18,6 +20,15 @@ function shouldShowWorkspaceConnectionStatus(state: WorkspaceState): boolean {
     state.hasPendingShellSnapshot ||
     (state.hasLoadedShellSnapshot && !state.hasReadyEnvironment)
   );
+}
+
+/** Mirrors the label's order: everything but the loading and syncing labels is trouble. */
+function hasConnectionTrouble(state: WorkspaceState): boolean {
+  if (state.networkStatus === "offline") return true;
+  if (state.hasReadyEnvironment && state.hasSyncingConnectedEnvironment) return false;
+  if (state.connectingEnvironments.length > 0) return true;
+  if (runtimeConnectionErrorText(state, m) !== null) return true;
+  return !state.hasPendingShellSnapshot;
 }
 
 function workspaceConnectionStatusLabel(state: WorkspaceState, resolve: MessageResolver): string {
@@ -59,6 +70,7 @@ export function workspaceConnectionStatusPresentation(
   if (!shouldShowWorkspaceConnectionStatus(state)) return null;
   return {
     label: workspaceConnectionStatusLabel(state, resolve),
+    connectionTrouble: hasConnectionTrouble(state),
     showsProgress:
       state.networkStatus !== "offline" &&
       (state.hasReadyEnvironment || state.connectionError === null) &&

@@ -1,4 +1,5 @@
 import { appAtomRegistry } from "./atom-registry";
+import { noteSentThreadMessage } from "./project-rail-sends";
 import { createThreadOutboxManager } from "./thread-outbox-manager";
 import type { QueuedThreadMessage } from "./thread-outbox-model";
 import { expoThreadOutboxStorage, flushThreadOutboxWrites } from "./thread-outbox-storage";
@@ -17,6 +18,11 @@ export async function flushThreadOutbox(): Promise<void> {
 }
 
 export function enqueueThreadOutboxMessage(message: QueuedThreadMessage): Promise<void> {
+  noteSentThreadMessage({
+    environmentId: message.environmentId,
+    threadId: message.threadId,
+    projectId: message.creation?.projectId ?? null,
+  });
   return threadOutboxManager.enqueue(message);
 }
 

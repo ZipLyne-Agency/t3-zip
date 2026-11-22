@@ -71,6 +71,8 @@ interface ThreadSwipeAction {
   readonly icon: ComponentProps<typeof SymbolView>["name"];
   readonly label: string;
   readonly destructive?: boolean;
+  /** Clear from Done gets its own soft green, so it never reads as the blue Settle. */
+  readonly clear?: boolean;
   readonly menu?: {
     readonly actions: MenuAction[];
     readonly onPressAction: NonNullable<ComponentProps<typeof Menu>["onPressAction"]>;
@@ -585,7 +587,7 @@ export function ThreadSwipeable(props: ThreadSwipeableProps) {
 function SwipeActionButton(props: {
   readonly accessibilityLabel: string;
   readonly actionsWidth: number;
-  readonly tone: "primary" | "secondary" | "danger";
+  readonly tone: "primary" | "secondary" | "danger" | "clear";
   readonly compact: boolean;
   readonly entryRange: readonly [number, number];
   readonly fullSwipeThreshold: number;
@@ -707,9 +709,11 @@ function SwipeActionButton(props: {
           className={
             props.tone === "danger"
               ? "bg-danger"
-              : props.tone === "secondary"
-                ? "bg-secondary"
-                : "bg-primary"
+              : props.tone === "clear"
+                ? "bg-adaptive-emerald-500-a12-a16"
+                : props.tone === "secondary"
+                  ? "bg-secondary"
+                  : "bg-primary"
           }
           style={[
             {
@@ -742,9 +746,11 @@ function SwipeActionButton(props: {
             tintColorClassName={
               props.tone === "danger"
                 ? "accent-danger-foreground"
-                : props.tone === "secondary"
-                  ? "accent-secondary-foreground"
-                  : "accent-primary-foreground"
+                : props.tone === "clear"
+                  ? "accent-adaptive-emerald-700-300"
+                  : props.tone === "secondary"
+                    ? "accent-secondary-foreground"
+                    : "accent-primary-foreground"
             }
             type="monochrome"
           />
@@ -838,7 +844,13 @@ function ThreadSwipeActions(props: {
       <SwipeActionButton
         accessibilityLabel={props.primaryAction.accessibilityLabel}
         actionsWidth={actionsWidth}
-        tone={props.primaryAction.destructive === true ? "danger" : "primary"}
+        tone={
+          props.primaryAction.destructive === true
+            ? "danger"
+            : props.primaryAction.clear === true
+              ? "clear"
+              : "primary"
+        }
         compact={props.compact}
         entryRange={
           secondaryAction === null

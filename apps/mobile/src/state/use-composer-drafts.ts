@@ -36,6 +36,7 @@ import { draftModelPickMatchesThread } from "@t3tools/shared/model";
 
 import { writeFileAtomically } from "../lib/atomic-file";
 import { createComposerContextHistory, referencedComposerContext } from "../lib/composerContext";
+import { composerDraftHasUserContent } from "./composer-draft-content";
 import { isQueuedEditDraftKey } from "./queued-edit-draft-key";
 import {
   collectComposerContextReferences,
@@ -479,6 +480,11 @@ export interface ComposerDraftWorkspaceSelection {
    * included) until the user picks a branch, rather than pinning the first name refs reported.
    */
   readonly followsCurrentCheckout?: boolean;
+  /**
+   * Tracked repositories a new worktree takes, by path. Absent until the user chooses, so the
+   * server's default applies.
+   */
+  readonly repositories?: ReadonlyArray<string>;
 }
 
 export type ComposerDraftSettingsUpdate = Pick<
@@ -498,6 +504,7 @@ const ComposerDraftWorkspaceSelectionSchema = Schema.Struct({
   startFromOrigin: Schema.optional(Schema.Boolean),
   pullRequestReference: Schema.optional(Schema.String),
   followsCurrentCheckout: Schema.optional(Schema.Boolean),
+  repositories: Schema.optional(Schema.Array(Schema.String)),
 });
 
 const ComposerDraftProjectSchema = Schema.Struct({
@@ -1285,7 +1292,9 @@ export async function removeDeliveredCloudQueuedMessage(
             editor.workspaceSelection.pullRequestReference !==
               message.creation?.pullRequestReference ||
             (editor.workspaceSelection.startFromOrigin ?? false) !==
-              (message.creation?.startFromOrigin ?? false))))
+              (message.creation?.startFromOrigin ?? false) ||
+            JSON.stringify(editor.workspaceSelection.repositories) !==
+              JSON.stringify(message.creation?.repositories))))
     )
       continue;
     const drafts = { ...saved.drafts };
@@ -2140,6 +2149,14 @@ const composerDraftAtom = Atom.family((draftKey: string) =>
 );
 const EMPTY_DRAFT_ATOM = Atom.make(EMPTY_DRAFT);
 
+/**
+ * Whether a thread's own draft holds unsent content. A row reads this boolean, so typing
+ * re-renders only the row whose marker appears or disappears, never the whole list.
+ */
+export const composerDraftHasContentAtom = Atom.family((draftKey: string) =>
+  Atom.make((get) => composerDraftHasUserContent(get(composerDraftsAtom)[draftKey])),
+);
+
 type ComposerDraftsByKey = Readonly<Record<string, ComposerDraft>>;
 const EMPTY_DRAFTS: ComposerDraftsByKey = {};
 function sameDrafts(a: ComposerDraftsByKey, b: ComposerDraftsByKey): boolean {
@@ -2228,6 +2245,11 @@ export function useComposerDraft(draftKey: string | null): ComposerDraft {
     ensureComposerDraftsLoaded();
   }, []);
   return draft;
+}
+
+/** A thread row's unsent-draft marker; the thread's draft key is its scoped thread key. */
+export function useComposerDraftHasContent(draftKey: string): boolean {
+  return useAtomValue(composerDraftHasContentAtom(draftKey));
 }
 
 export function useStickyComposerModelSelection(): ModelSelection | null {

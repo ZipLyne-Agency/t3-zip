@@ -48,10 +48,11 @@ export function WorkspaceConnectionStatusProvider(props: { readonly children: Re
 
   const label = presentation?.label;
   const showsProgress = presentation?.showsProgress ?? false;
+  const connectionTrouble = presentation?.connectionTrouble ?? false;
   const status =
     label === undefined || since === null || !fadeStarted
       ? null
-      : { label, showsProgress, fadeIn: !fadeEnded };
+      : { label, showsProgress, connectionTrouble, fadeIn: !fadeEnded };
   return <ConnectionStatusContext value={status}>{props.children}</ConnectionStatusContext>;
 }
 
@@ -91,6 +92,43 @@ function StatusFadeIn(props: {
     >
       {props.children}
     </Animated.View>
+  );
+}
+
+/**
+ * Phone Home's header holds the project switcher instead of the brand, so connection trouble
+ * shows there as this icon alone: only while offline, reconnecting or failing, not while threads
+ * load or sync. It opens environment settings, like the status beside the brand.
+ */
+export function WorkspaceConnectionTroubleIcon(props: { readonly onPress: () => void }) {
+  const status = use(ConnectionStatusContext);
+  const gt = useGT();
+  const { scale } = useAndroidControlSizing();
+  if (status === null || !status.connectionTrouble) return null;
+  return (
+    <StatusFadeIn animate={status.fadeIn}>
+      <Pressable
+        accessibilityHint={gt("Opens environment settings")}
+        accessibilityLabel={status.label}
+        accessibilityRole="button"
+        onPress={props.onPress}
+        className="h-11 w-11 items-center justify-center active:opacity-60"
+      >
+        {status.showsProgress ? (
+          <AppActivityIndicator
+            colorClassName="accent-icon-muted"
+            size={Platform.OS === "android" ? Math.round(20 * scale) : "small"}
+          />
+        ) : (
+          <SymbolView
+            name="wifi.slash"
+            size={Math.round(17 * scale)}
+            tintColorClassName="accent-icon-muted"
+            type="monochrome"
+          />
+        )}
+      </Pressable>
+    </StatusFadeIn>
   );
 }
 

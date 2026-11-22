@@ -2,6 +2,17 @@ import * as Schema from "effect/Schema";
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 
+import {
+  isEmptySharedProjectRail,
+  localProjectRailFromShared,
+  nextProjectRailEditTime,
+  sameSharedProjectRail,
+  sharedProjectRailContentFromLocal,
+  type LocalProjectRail,
+  type SharedProjectRail,
+  type SharedProjectRailContent,
+} from "@t3tools/client-runtime/state/project-rail";
+
 import { resolveStorage } from "../../lib/storage";
 import {
   EMPTY_RAIL_LAYOUT,
@@ -40,6 +51,12 @@ const PersistedRailSchema = Schema.Struct({
   threadColumnScope: Schema.optionalKey(
     Schema.NullOr(Schema.Struct({ scope: Schema.String, madeUnder: Schema.NullOr(Schema.String) })),
   ),
+  // T3 Zip: when this device last changed the shared fields without the server confirming it.
+  // Null once the server holds this device's rail; absent in state from before the rail synced.
+  sharedPendingSince: Schema.optionalKey(Schema.NullOr(Schema.String)),
+  // T3 Zip: `updatedAt` of the server rail this device last adopted or had confirmed; null if
+  // it never synced.
+  sharedBaseUpdatedAt: Schema.optionalKey(Schema.NullOr(Schema.String)),
 });
 type PersistedRail = Omit<Required<typeof PersistedRailSchema.Type>, "filter"> & {
   readonly filter: RailFilter;
@@ -60,7 +77,32 @@ const DEFAULT_RAIL: PersistedRail = {
   favoritesOnly: false,
   threadColumnOpen: true,
   threadColumnScope: null,
+  sharedPendingSince: null,
+  sharedBaseUpdatedAt: null,
 };
+
+/** The fields the server shares with the phone (`ServerSettings.projectRail`), folding aside. */
+export function selectSharedProjectRail(state: LocalProjectRail): SharedProjectRailContent {
+  return sharedProjectRailContentFromLocal(state);
+}
+
+/**
+ * One-time copies of a rail the first sync replaced, in case it is wanted back: this device's
+ * own rail when it takes the server's, and the server's when this device's rail replaces it.
+ */
+const PROJECT_RAIL_PRE_SYNC_BACKUP_KEY = "t3code:project-rail:pre-sync-backup";
+export const PROJECT_RAIL_REPLACED_SERVER_BACKUP_KEY = "t3code:project-rail:replaced-server-backup";
+
+/** Saves `rail` under `key` unless something is already there. */
+export function backUpProjectRailOnce(key: string, rail: SharedProjectRailContent): void {
+  if (typeof window === "undefined" || isEmptySharedProjectRail(rail)) return;
+  try {
+    if (window.localStorage.getItem(key)) return;
+    window.localStorage.setItem(key, JSON.stringify({ savedAt: new Date().toISOString(), rail }));
+  } catch {
+    // Storage can be full or blocked; the backup is a courtesy.
+  }
+}
 
 /**
  * Saved rail state, read field by field when it does not decode as a whole. One value this
@@ -123,85 +165,147 @@ interface ProjectRailStore extends PersistedRail {
   readonly setThreadColumnOpen: (open: boolean) => void;
   /** Shows a project's threads (or every project's) in the column; see `resolveThreadColumnScope`. */
   readonly chooseThreadColumnScope: (scope: string, madeUnder: string | null) => void;
+  /** Takes the server's rail, keeping this device's folder folding. Not an edit: nothing is sent. */
+  readonly adoptSharedRail: (rail: SharedProjectRail) => void;
+  /** The server holds this device's rail, as the value stamped `updatedAt`. */
+  readonly confirmSharedRail: (updatedAt: string) => void;
 }
 
-/** Device-local, like the sidebar's project order in the UI state store. */
+const SHARED_FIELDS = ["layout", "favoriteProjects", "hiddenProjects", "snoozedProjects"] as const;
+
+/**
+ * Stamps `sharedPendingSince` on any change to the shared fields' content, so the sync sends it.
+ * Folding a folder or a layout rebuilt with the same content is not a shared change.
+ */
+function markSharedEdits(
+  state: ProjectRailStore,
+  next: Partial<ProjectRailStore>,
+  nowMs: () => number,
+): Partial<ProjectRailStore> {
+  if ((next as unknown) === state || "sharedPendingSince" in next) return next;
+  if (!SHARED_FIELDS.some((field) => field in next && next[field] !== state[field])) return next;
+  const before = selectSharedProjectRail(state);
+  const after = selectSharedProjectRail({ ...state, ...next } as ProjectRailStore);
+  if (sameSharedProjectRail(before, after)) return next;
+  return {
+    ...next,
+    sharedPendingSince: nextProjectRailEditTime(nowMs(), state.sharedBaseUpdatedAt),
+  };
+}
+
+/**
+ * T3 Zip: folders, order, favorites, hidden and snoozed projects are shared with the phone
+ * through the primary server's settings (see `railSync.ts`) and kept here too, so the rail shows
+ * at once and works against servers without the field. The rest is device-local.
+ */
 export const useProjectRailStore = create<ProjectRailStore>()(
   persist(
-    (set) => ({
-      ...DEFAULT_RAIL,
-      sentInProjects: [],
-      noteSentInProject: (memberKey) =>
-        set((state) =>
-          state.sentInProjects.includes(memberKey)
-            ? state
-            : { sentInProjects: [...state.sentInProjects, memberKey] },
-        ),
-      clearSentInProjects: () =>
-        set((state) => (state.sentInProjects.length === 0 ? state : { sentInProjects: [] })),
-      updateLayout: (knownProjectKeys, change) =>
-        set((state) => {
-          const layout = change(materializeRailLayout(state.layout, knownProjectKeys));
-          return layout === state.layout ? state : { layout };
-        }),
-      replaceLayout: (layout) => set({ layout }),
-      setNoProjectPosition: (noProjectPosition) => set({ noProjectPosition }),
-      rememberThread: (projectKey, threadKey) =>
-        set((state) =>
-          state.lastThreadByProject[projectKey] === threadKey
-            ? state
-            : { lastThreadByProject: { ...state.lastThreadByProject, [projectKey]: threadKey } },
-        ),
-      revealProject: (projectKey) =>
-        set((state) => {
-          const layout = revealRailProject(state.layout, projectKey);
-          return layout === state.layout ? state : { layout };
-        }),
-      hideProject: (projectKey) =>
-        set((state) => {
-          const hiddenProjects = addRailProjectKey(state.hiddenProjects, projectKey);
-          return hiddenProjects === state.hiddenProjects ? state : { hiddenProjects };
-        }),
-      showProject: (projectKey) =>
-        set((state) => {
-          const hiddenProjects = removeRailProjectKey(state.hiddenProjects, projectKey);
-          return hiddenProjects === state.hiddenProjects ? state : { hiddenProjects };
-        }),
-      snoozeProject: (projectKey, until) =>
-        set((state) => ({ snoozedProjects: { ...state.snoozedProjects, [projectKey]: until } })),
-      wakeProjects: (projectKeys) =>
-        set((state) => {
-          if (!projectKeys.some((key) => key in state.snoozedProjects)) return state;
-          const snoozedProjects = { ...state.snoozedProjects };
-          for (const key of projectKeys) delete snoozedProjects[key];
-          return { snoozedProjects };
-        }),
-      restoreProjectSnooze: (projectKey, until) =>
-        set((state) => {
-          const snoozedProjects = { ...state.snoozedProjects };
-          if (until === undefined) delete snoozedProjects[projectKey];
-          else snoozedProjects[projectKey] = until;
-          return { snoozedProjects };
-        }),
-      setShelvesCollapsed: (shelvesCollapsed) => set({ shelvesCollapsed }),
-      setProjectFavorite: (projectKey, favorite) =>
-        set((state) => {
-          const favoriteProjects = favorite
-            ? addRailProjectKey(state.favoriteProjects, projectKey)
-            : removeRailProjectKey(state.favoriteProjects, projectKey);
-          return favoriteProjects === state.favoriteProjects ? state : { favoriteProjects };
-        }),
-      setFilter: (filter) => set({ filter }),
-      setFavoritesOnly: (favoritesOnly) => set({ favoritesOnly }),
-      setThreadColumnOpen: (threadColumnOpen) => set({ threadColumnOpen }),
-      chooseThreadColumnScope: (scope, madeUnder) =>
-        set((state) =>
-          state.threadColumnScope?.scope === scope &&
-          state.threadColumnScope.madeUnder === madeUnder
-            ? state
-            : { threadColumnScope: { scope, madeUnder } },
-        ),
-    }),
+    (rawSet, get) => {
+      const set = (
+        partial:
+          | Partial<ProjectRailStore>
+          | ((state: ProjectRailStore) => Partial<ProjectRailStore>),
+      ) =>
+        rawSet((state) =>
+          markSharedEdits(
+            state,
+            typeof partial === "function" ? partial(state) : partial,
+            Date.now,
+          ),
+        );
+      return {
+        ...DEFAULT_RAIL,
+        sentInProjects: [],
+        noteSentInProject: (memberKey) =>
+          set((state) =>
+            state.sentInProjects.includes(memberKey)
+              ? state
+              : { sentInProjects: [...state.sentInProjects, memberKey] },
+          ),
+        clearSentInProjects: () =>
+          set((state) => (state.sentInProjects.length === 0 ? state : { sentInProjects: [] })),
+        updateLayout: (knownProjectKeys, change) =>
+          set((state) => {
+            const layout = change(materializeRailLayout(state.layout, knownProjectKeys));
+            return layout === state.layout ? state : { layout };
+          }),
+        replaceLayout: (layout) => set({ layout }),
+        setNoProjectPosition: (noProjectPosition) => set({ noProjectPosition }),
+        rememberThread: (projectKey, threadKey) =>
+          set((state) =>
+            state.lastThreadByProject[projectKey] === threadKey
+              ? state
+              : { lastThreadByProject: { ...state.lastThreadByProject, [projectKey]: threadKey } },
+          ),
+        revealProject: (projectKey) =>
+          set((state) => {
+            const layout = revealRailProject(state.layout, projectKey);
+            return layout === state.layout ? state : { layout };
+          }),
+        hideProject: (projectKey) =>
+          set((state) => {
+            const hiddenProjects = addRailProjectKey(state.hiddenProjects, projectKey);
+            return hiddenProjects === state.hiddenProjects ? state : { hiddenProjects };
+          }),
+        showProject: (projectKey) =>
+          set((state) => {
+            const hiddenProjects = removeRailProjectKey(state.hiddenProjects, projectKey);
+            return hiddenProjects === state.hiddenProjects ? state : { hiddenProjects };
+          }),
+        snoozeProject: (projectKey, until) =>
+          set((state) => ({ snoozedProjects: { ...state.snoozedProjects, [projectKey]: until } })),
+        wakeProjects: (projectKeys) =>
+          set((state) => {
+            if (!projectKeys.some((key) => key in state.snoozedProjects)) return state;
+            const snoozedProjects = { ...state.snoozedProjects };
+            for (const key of projectKeys) delete snoozedProjects[key];
+            return { snoozedProjects };
+          }),
+        restoreProjectSnooze: (projectKey, until) =>
+          set((state) => {
+            const snoozedProjects = { ...state.snoozedProjects };
+            if (until === undefined) delete snoozedProjects[projectKey];
+            else snoozedProjects[projectKey] = until;
+            return { snoozedProjects };
+          }),
+        setShelvesCollapsed: (shelvesCollapsed) => set({ shelvesCollapsed }),
+        setProjectFavorite: (projectKey, favorite) =>
+          set((state) => {
+            const favoriteProjects = favorite
+              ? addRailProjectKey(state.favoriteProjects, projectKey)
+              : removeRailProjectKey(state.favoriteProjects, projectKey);
+            return favoriteProjects === state.favoriteProjects ? state : { favoriteProjects };
+          }),
+        setFilter: (filter) => set({ filter }),
+        setFavoritesOnly: (favoritesOnly) => set({ favoritesOnly }),
+        setThreadColumnOpen: (threadColumnOpen) => set({ threadColumnOpen }),
+        chooseThreadColumnScope: (scope, madeUnder) =>
+          set((state) =>
+            state.threadColumnScope?.scope === scope &&
+            state.threadColumnScope.madeUnder === madeUnder
+              ? state
+              : { threadColumnScope: { scope, madeUnder } },
+          ),
+        adoptSharedRail: (rail) => {
+          const state = get();
+          // Only a device that never synced loses a rail of its own here.
+          if (state.sharedBaseUpdatedAt === null) {
+            backUpProjectRailOnce(PROJECT_RAIL_PRE_SYNC_BACKUP_KEY, selectSharedProjectRail(state));
+          }
+          rawSet({
+            ...localProjectRailFromShared(rail, state.layout),
+            sharedPendingSince: null,
+            sharedBaseUpdatedAt: rail.updatedAt,
+          });
+        },
+        confirmSharedRail: (updatedAt) =>
+          rawSet((state) =>
+            state.sharedPendingSince === null && state.sharedBaseUpdatedAt === updatedAt
+              ? state
+              : { sharedPendingSince: null, sharedBaseUpdatedAt: updatedAt },
+          ),
+      };
+    },
     {
       name: "t3code:project-rail:v1",
       version: 1,
@@ -220,6 +324,8 @@ export const useProjectRailStore = create<ProjectRailStore>()(
         favoritesOnly,
         threadColumnOpen,
         threadColumnScope,
+        sharedPendingSince,
+        sharedBaseUpdatedAt,
       }) => ({
         layout,
         noProjectPosition,
@@ -232,13 +338,23 @@ export const useProjectRailStore = create<ProjectRailStore>()(
         favoritesOnly,
         threadColumnOpen,
         threadColumnScope,
+        sharedPendingSince,
+        sharedBaseUpdatedAt,
       }),
       // Storage is user-editable and may come from a newer build; see `readPersistedRail`.
       merge: (persisted, current) => {
-        const { filter, ...rest } = readPersistedRail(persisted);
+        const { filter, sharedPendingSince, ...rest } = readPersistedRail(persisted);
+        const merged = { ...current, ...rest };
         return {
-          ...current,
-          ...rest,
+          ...merged,
+          // A rail saved before syncing counts as an edit made now, so it seeds the server or
+          // wins over a value the phone wrote first. After that the saved marker is used.
+          sharedPendingSince:
+            sharedPendingSince !== undefined
+              ? sharedPendingSince
+              : isEmptySharedProjectRail(selectSharedProjectRail(merged))
+                ? null
+                : new Date().toISOString(),
           ...(filter === undefined
             ? {}
             : filter === "favorites"

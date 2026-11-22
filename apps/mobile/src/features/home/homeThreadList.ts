@@ -117,12 +117,13 @@ export function findHomeProjectScope(
   );
 }
 
-export function sortHomeProjectScopes(input: {
+/** Each scope's sort time: its latest thread or pending task, else its projects' own time. */
+export function homeProjectScopeActivity(input: {
   readonly scopes: ReadonlyArray<HomeProjectScope>;
   readonly threads: ReadonlyArray<EnvironmentThreadShell>;
   readonly pendingTasks: ReadonlyArray<PendingNewTask>;
   readonly projectSortOrder: HomeProjectSortOrder;
-}): ReadonlyArray<HomeProjectScope> {
+}): ReadonlyMap<string, number> {
   const scopeKeyByProjectRef = new Map(
     input.scopes.flatMap((scope) =>
       scope.projectRefs.map(
@@ -154,6 +155,26 @@ export function sortHomeProjectScopes(input: {
     );
   }
 
+  return new Map(
+    input.scopes.map((scope) => [
+      scope.key,
+      latestActivityByScope.get(scope.key) ??
+        Math.max(
+          ...scope.projects.map((project) =>
+            getProjectSortTimestamp(project, input.projectSortOrder),
+          ),
+        ),
+    ]),
+  );
+}
+
+export function sortHomeProjectScopes(input: {
+  readonly scopes: ReadonlyArray<HomeProjectScope>;
+  readonly threads: ReadonlyArray<EnvironmentThreadShell>;
+  readonly pendingTasks: ReadonlyArray<PendingNewTask>;
+  readonly projectSortOrder: HomeProjectSortOrder;
+}): ReadonlyArray<HomeProjectScope> {
+  const activityByScope = homeProjectScopeActivity(input);
   return Arr.sort(
     input.scopes,
     Order.mapInput(
@@ -163,13 +184,7 @@ export function sortHomeProjectScopes(input: {
         key: Order.String,
       }),
       (scope: HomeProjectScope) => ({
-        timestamp:
-          latestActivityByScope.get(scope.key) ??
-          Math.max(
-            ...scope.projects.map((project) =>
-              getProjectSortTimestamp(project, input.projectSortOrder),
-            ),
-          ),
+        timestamp: activityByScope.get(scope.key) ?? Number.NEGATIVE_INFINITY,
         title: scope.title,
         key: scope.key,
       }),

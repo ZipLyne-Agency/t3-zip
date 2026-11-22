@@ -111,6 +111,14 @@
       "types": "./src/linkRequest.ts",
       "default": "./src/linkRequest.ts"
     },
+    "./linked-thread": {
+      "types": "./src/linkedThread.ts",
+      "default": "./src/linkedThread.ts"
+    },
+    "./side-thread": {
+      "types": "./src/sideThread.ts",
+      "default": "./src/sideThread.ts"
+    },
     "./scheduled-task-webhook": {
       "types": "./src/scheduledTaskWebhook.ts",
       "default": "./src/scheduledTaskWebhook.ts"
@@ -262,6 +270,10 @@
     "./state/orchestration": {
       "types": "./src/state/orchestration.ts",
       "default": "./src/state/orchestration.ts"
+    },
+    "./state/thread-stream": {
+      "types": "./src/state/threadStream.ts",
+      "default": "./src/state/threadStream.ts"
     },
     "./state/thread-history-merge": {
       "types": "./src/state/threadHistoryMerge.ts",
@@ -415,6 +427,10 @@
       "types": "./src/state/threadCheckpoints.ts",
       "default": "./src/state/threadCheckpoints.ts"
     },
+    "./state/thread-repositories": {
+      "types": "./src/state/threadRepositories.ts",
+      "default": "./src/state/threadRepositories.ts"
+    },
     "./state/thread-execution": {
       "types": "./src/state/threadExecution.ts",
       "default": "./src/state/threadExecution.ts"
@@ -450,6 +466,14 @@
     "./state/thread-settled": {
       "types": "./src/state/threadSettled.ts",
       "default": "./src/state/threadSettled.ts"
+    },
+    "./state/thread-status-filter": {
+      "types": "./src/state/threadStatusFilter.ts",
+      "default": "./src/state/threadStatusFilter.ts"
+    },
+    "./state/project-rail": {
+      "types": "./src/state/projectRail.ts",
+      "default": "./src/state/projectRail.ts"
     },
     "./state/thread-search": {
       "types": "./src/state/threadSearch.ts",

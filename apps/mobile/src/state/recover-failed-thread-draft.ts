@@ -9,6 +9,7 @@ import {
   flushComposerDrafts,
   getComposerDraftSnapshot,
   mergeComposerDraftContent,
+  retargetNewTaskDraft,
 } from "./use-composer-drafts";
 
 export async function recoverFailedThreadDraft(message: QueuedThreadMessage): Promise<void> {
@@ -29,6 +30,13 @@ export async function recoverFailedThreadDraft(message: QueuedThreadMessage): Pr
   appendComposerDraftAttachments(targetKey, attachmentsMissingFrom(targetKey, source.attachments), {
     restore: true,
   });
+  // The home list shows a new-task draft by its project stamp; without one it would not list.
+  if (message.creation && getComposerDraftSnapshot(targetKey).project === undefined) {
+    retargetNewTaskDraft(targetKey, {
+      environmentId: message.environmentId,
+      projectId: message.creation.projectId,
+    });
+  }
   await flushComposerDrafts();
   abortComposerDraftOperations(sourceKey);
   // A paste still preparing can land in the source during the saves; move it with its reference.

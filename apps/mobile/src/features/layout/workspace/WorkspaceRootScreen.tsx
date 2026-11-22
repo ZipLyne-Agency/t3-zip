@@ -28,6 +28,7 @@ import {
 } from "../../../native/native-layout-metrics";
 import { HomeRouteScreen } from "../../home/HomeRouteScreen";
 import { WorkspaceConnectionTitle } from "../../home/WorkspaceConnectionTitle";
+import { HomeHeaderProjectSwitcher } from "../../home/HomeHeaderProjectSwitcher";
 import { useAdaptiveWorkspaceLayout } from "../AdaptiveWorkspaceLayout";
 import { PullRequestsScreen } from "../../pull-requests/PullRequestsScreen";
 import { IssuesScreen } from "../../issues/IssuesScreen";
@@ -38,7 +39,7 @@ import {
 } from "./WorkspaceTabsContext";
 import { WorkspaceToolbar } from "./WorkspaceToolbar";
 import { WORKSPACE_DOCK, workspaceDockBottomClearance } from "./workspace-tabs-state";
-import { WorkspaceSidebarTabs } from "./WorkspaceSidebarTabs";
+import { WorkspaceTabDock } from "./WorkspaceTabDock";
 import {
   useCompactWorkspaceTabs,
   useSidebarWorkspaceTabs,
@@ -51,6 +52,8 @@ const TAB_TITLES = WORKSPACE_TAB_LABELS;
 function WorkspaceRootTitle(props: {
   readonly columnWidth: number;
   readonly onOpenEnvironments: () => void;
+  /** Phone Home: the project switcher takes the brand's place. */
+  readonly projectSwitcher: boolean;
 }) {
   const gt = useGT();
   const m = useMessages();
@@ -62,6 +65,13 @@ function WorkspaceRootTitle(props: {
     : enabled.length
       ? m(TAB_TITLES[state.selectedTab])
       : gt("Navigation", { $context: "screen title when every navigation tab is hidden" });
+  if (props.projectSwitcher) {
+    return (
+      <View style={{ width: maxWidth, minHeight: 32, justifyContent: "center" }}>
+        <HomeHeaderProjectSwitcher onOpenEnvironments={props.onOpenEnvironments} />
+      </View>
+    );
+  }
   return (
     <View style={{ width: maxWidth, minHeight: 32, justifyContent: "center" }}>
       <WorkspaceConnectionTitle
@@ -110,10 +120,19 @@ function WorkspaceRootContent() {
   // Settings is a workspace tab too; its list takes the place of the selected tab's.
   const settingsOpen = workspace.settingsOpen;
   const headerOnly = use(NativeWorkspaceTabActivityContext)?.headerOnly === true;
+  // Phone Home: the header holds the project switcher, so the list drops its own. Beside a
+  // detail column the header keeps the brand and the list keeps the switcher.
+  const headerProjectSwitcher =
+    !sidebarNavigation &&
+    !layout.usesSplitView &&
+    enabled.length > 0 &&
+    !settingsOpen &&
+    state.selectedTab === "threads";
   const renderHeaderTitle = () => (
     <WorkspaceRootTitle
       columnWidth={width}
       onOpenEnvironments={() => openSettings(navigation, "SettingsEnvironments")}
+      projectSwitcher={headerProjectSwitcher}
     />
   );
   const tab = state.tabs[settingsOpen ? "settings" : state.selectedTab];
@@ -177,7 +196,7 @@ function WorkspaceRootContent() {
           ) : enabled.length === 0 ? (
             <WorkspaceNoTabs />
           ) : state.selectedTab === "threads" ? (
-            <HomeRouteScreen />
+            <HomeRouteScreen headerProjectSwitcher={headerProjectSwitcher} />
           ) : state.selectedTab === "pullRequests" ? (
             <PullRequestsScreen />
           ) : state.selectedTab === "issues" ? (
@@ -187,7 +206,7 @@ function WorkspaceRootContent() {
           )}
         </SafeAreaInsetsContext>
         {deviceType !== "pad" && deviceType !== "phone" && sidebarPicker ? (
-          <WorkspaceSidebarTabs />
+          <WorkspaceTabDock placement="column" />
         ) : null}
         {enabled.length === 0 && !settingsOpen ? null : settingsOpen ||
           state.selectedTab !== "usage" ? (

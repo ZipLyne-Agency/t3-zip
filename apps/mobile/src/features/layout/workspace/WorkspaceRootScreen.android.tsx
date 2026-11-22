@@ -97,7 +97,8 @@ function WorkspaceRoot() {
                 selected={tab}
                 renderTab={(tab) =>
                   tab === "threads" ? (
-                    <HomeRouteScreen />
+                    // Its own app bar holds the project switcher; split view lists in the sidebar.
+                    <HomeRouteScreen headerProjectSwitcher />
                   ) : tab === "usage" ? (
                     <WorkspacePageFrame width={workspacePageWidth ?? null}>
                       <WorkspaceExtraTab tab={tab} />

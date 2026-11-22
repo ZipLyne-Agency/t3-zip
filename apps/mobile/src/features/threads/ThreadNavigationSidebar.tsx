@@ -41,6 +41,9 @@ import { useQueuedThreadKeys } from "../../state/use-thread-outbox";
 import { useWorkspaceState } from "../../state/workspace";
 import { useSavedRemoteConnections } from "../../state/use-remote-environment-registry";
 import { useThreadListV2 } from "./useThreadListV2";
+import { ThreadStatusFilterBar, ThreadStatusSectionHeader } from "./ThreadStatusFilterBar";
+import { threadStatusDoneThreads } from "./threadStatusFilterList";
+import { useThreadStatusFilter } from "./use-thread-status-filter";
 import { useSidebarRowThreadKey } from "./useSidebarRowThreadKey";
 import { useThreadJumpShortcuts } from "../keyboard/threadKeyboardShortcuts";
 import { requestThreadMessageJump } from "./threadMessageJump";
@@ -274,10 +277,19 @@ function ThreadNavigationSidebarPane(props: ThreadNavigationSidebarProps) {
   const resolveProviderInstance = useThreadRowProviderInstanceResolver(providersByEnvironmentId);
   const pendingOrder = usePendingThreadOrder();
   const {
+    statusFilter,
+    setStatusFilter,
+    clears: doneClears,
+    clearFromDone,
+  } = useThreadStatusFilter();
+  const {
     layout: threadListV2Layout,
     items: threadListV2Items,
     contentOnlyThreadKeys,
     olderSettledShelf,
+    statusEntries,
+    statusCounts,
+    appliedStatusFilter,
   } = useThreadListV2({
     threads: launchingThreads,
     pendingTasks,
@@ -300,9 +312,27 @@ function ThreadNavigationSidebarPane(props: ThreadNavigationSidebarProps) {
     snoozedShelfExpanded,
     settledShelfExpanded,
     selectedThreadKey,
+    statusFilter,
+    doneClears,
   });
+  const clearThreadFromDone = (thread: EnvironmentThreadShell) => {
+    const key = scopedThreadKey(thread.environmentId, thread.id);
+    const entry = statusEntries.find(
+      (candidate) => scopedThreadKey(candidate.thread.environmentId, candidate.thread.id) === key,
+    );
+    clearFromDone([{ thread, unread: entry?.doneSection === "new" }]);
+  };
+  const clearAllFromDone = () =>
+    clearFromDone(
+      threadStatusDoneThreads(statusEntries).map((entry) => ({
+        thread: entry.thread,
+        unread: entry.doneSection === "new",
+      })),
+    );
   const listItems: readonly SidebarListItem[] =
-    settledShelfExpanded && threadListV2Layout.hiddenSettledCount > 0
+    appliedStatusFilter === "all" &&
+    settledShelfExpanded &&
+    threadListV2Layout.hiddenSettledCount > 0
       ? [
           ...threadListV2Items,
           {
@@ -370,7 +400,7 @@ function ThreadNavigationSidebarPane(props: ThreadNavigationSidebarProps) {
     threadSearchMatchByKey,
     workingShelfEnabled,
   };
-  useThreadJumpShortcuts(listItems, handleSelectThread);
+  useThreadJumpShortcuts(listItems, handleSelectThread, props.onOpenPendingTask);
   const sidebarItemsAreEqual = (previous: SidebarListItem, item: SidebarListItem): boolean => {
     if (isThreadListV2ListItem(previous) && isThreadListV2ListItem(item)) {
       return threadListV2ListItemsAreEqual(previous, item);
@@ -464,6 +494,7 @@ function ThreadNavigationSidebarPane(props: ThreadNavigationSidebarProps) {
             onOpenThreadPullRequests={handleOpenThreadPullRequests}
             onDeleteThread={confirmDeleteThread}
             onArchiveThread={archiveThread}
+            onClearFromDone={item.doneSection ? clearThreadFromDone : undefined}
             onRenameThread={renameThread}
             onRegenerateThreadTitle={regenerateThreadTitle}
             titleRegenerationSupported={titleRegenerationEnvironmentIds.has(thread.environmentId)}
@@ -495,6 +526,16 @@ function ThreadNavigationSidebarPane(props: ThreadNavigationSidebarProps) {
           />
         );
       }
+      case "v2-status-section":
+        return (
+          <ThreadStatusSectionHeader
+            section={item.section}
+            count={item.count}
+            clearAllCount={item.clearAllCount}
+            onClearAll={clearAllFromDone}
+            pane="sidebar"
+          />
+        );
       case "v2-working-shelf":
         return (
           <ThreadListV2WorkingShelfHeader
@@ -571,6 +612,16 @@ function ThreadNavigationSidebarPane(props: ThreadNavigationSidebarProps) {
       }}
     />
   );
+  const statusBar =
+    props.searchQuery.trim().length > 0 ? null : (
+      <ThreadStatusFilterBar
+        selected={statusFilter}
+        counts={statusCounts}
+        openCount={statusEntries.length}
+        onSelect={setStatusFilter}
+        pane="sidebar"
+      />
+    );
   const showAddEnvironment =
     !catalogState.isLoadingConnections &&
     !catalogState.hasReadyEnvironment &&
@@ -594,9 +645,15 @@ function ThreadNavigationSidebarPane(props: ThreadNavigationSidebarProps) {
                 : threadSearch.failed
                   ? gt("Couldn't search thread messages")
                   : gt("No matching threads")
-              : selectedProjectScope !== null
-                ? gt("No threads in {project}", { project: selectedProjectScope.title })
-                : gt("No threads yet")}
+              : appliedStatusFilter === "waiting"
+                ? gt("Nothing is waiting for you.")
+                : appliedStatusFilter === "working"
+                  ? gt("Nothing is running right now.")
+                  : appliedStatusFilter === "done"
+                    ? gt("No finished threads to check.")
+                    : selectedProjectScope !== null
+                      ? gt("No threads in {project}", { project: selectedProjectScope.title })
+                      : gt("No threads yet")}
       </Text>
       {showAddEnvironment ? (
         <View className={Platform.OS === "android" ? "self-center" : "px-2"}>
@@ -647,6 +704,7 @@ function ThreadNavigationSidebarPane(props: ThreadNavigationSidebarProps) {
                 scrollEventThrottle={16}
                 showsVerticalScrollIndicator={false}
                 style={styles.threadList}
+                ListHeaderComponent={statusBar}
                 ListEmptyComponent={listEmpty}
               />
             </GestureDetector>
@@ -671,7 +729,7 @@ function ThreadNavigationSidebarPane(props: ThreadNavigationSidebarProps) {
           overflow: "hidden",
         }}
       >
-        {listItems.length === 0 ? (
+        {listItems.length === 0 && appliedStatusFilter === "all" ? (
           <View className="flex-1 items-center justify-center">{listEmpty}</View>
         ) : (
           <SwipeableScrollGateProvider enabled={swipeEnabled}>
@@ -700,6 +758,7 @@ function ThreadNavigationSidebarPane(props: ThreadNavigationSidebarProps) {
                 scrollEventThrottle={16}
                 showsVerticalScrollIndicator={false}
                 style={styles.threadList}
+                ListHeaderComponent={statusBar}
                 ListEmptyComponent={listEmpty}
               />
             </GestureDetector>

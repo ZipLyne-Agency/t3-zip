@@ -341,6 +341,7 @@ export function threadListV2RowAccessibilityLabel(
     readonly snoozeWakeLabel: string | undefined;
     readonly providerNameLabel: string | null;
     readonly hasQueuedMessages: boolean;
+    readonly hasUnsentDraft?: boolean;
     readonly regeneratingTitle: boolean;
   },
   resolve: MessageResolver = m,
@@ -357,6 +358,7 @@ export function threadListV2RowAccessibilityLabel(
     meta,
     input.providerNameLabel,
     input.hasQueuedMessages ? resolve(msg("messages queued to send")) : null,
+    input.hasUnsentDraft ? resolve(msg("Unsent draft")) : null,
     input.regeneratingTitle ? resolve(msg("regenerating title")) : null,
   ]
     .filter((part) => part !== null)
@@ -467,6 +469,8 @@ export interface ThreadListV2ThreadListItem {
   readonly hasQueuedMessages: boolean;
   readonly canMoveUp: boolean;
   readonly canMoveDown: boolean;
+  /** Set when the Done filter lists the row: it swipes to Clear instead of Settle. */
+  readonly doneSection?: "new" | "opened";
 }
 
 export interface ThreadListV2PendingListItem {
@@ -502,7 +506,18 @@ export interface ThreadListV2SettledShelfListItem {
   readonly disabled: boolean;
 }
 
+/** A heading in the Done filter: New (not opened yet) or Opened (not cleared yet). */
+export interface ThreadListV2StatusSectionListItem {
+  readonly type: "v2-status-section";
+  readonly key: string;
+  readonly section: "new" | "opened";
+  readonly count: number;
+  /** The first heading carries Clear All for every thread Done lists. */
+  readonly clearAllCount: number;
+}
+
 export type ThreadListV2ListItem =
+  | ThreadListV2StatusSectionListItem
   | ThreadListV2ThreadListItem
   | ThreadListV2PendingListItem
   | ThreadListV2WorkingShelfListItem
@@ -517,7 +532,8 @@ export function isThreadListV2ListItem(value: {
     value.type === "v2-pending" ||
     value.type === "v2-working-shelf" ||
     value.type === "v2-snoozed-shelf" ||
-    value.type === "v2-settled-shelf"
+    value.type === "v2-settled-shelf" ||
+    value.type === "v2-status-section"
   );
 }
 
@@ -542,7 +558,8 @@ export function threadListV2ListItemsAreEqual(
         previous.showTrailingDivider === item.showTrailingDivider &&
         previous.hasQueuedMessages === item.hasQueuedMessages &&
         previous.canMoveUp === item.canMoveUp &&
-        previous.canMoveDown === item.canMoveDown
+        previous.canMoveDown === item.canMoveDown &&
+        previous.doneSection === item.doneSection
       );
     case "v2-pending":
       return (
@@ -572,6 +589,13 @@ export function threadListV2ListItemsAreEqual(
         previous.count === item.count &&
         previous.expanded === item.expanded &&
         previous.disabled === item.disabled
+      );
+    case "v2-status-section":
+      return (
+        previous.type === "v2-status-section" &&
+        previous.key === item.key &&
+        previous.count === item.count &&
+        previous.clearAllCount === item.clearAllCount
       );
   }
 }

@@ -23,6 +23,7 @@ import IconArrowsLeftRight from "@tabler/icons-react-native/IconArrowsLeftRight"
 import IconArrowsDiagonal2 from "@tabler/icons-react-native/IconArrowsDiagonal2";
 import IconArrowsMinimize from "@tabler/icons-react-native/IconArrowsMinimize";
 import IconBan from "@tabler/icons-react-native/IconBan";
+import IconBellOff from "@tabler/icons-react-native/IconBellOff";
 import IconBellRinging from "@tabler/icons-react-native/IconBellRinging";
 import IconBolt from "@tabler/icons-react-native/IconBolt";
 import IconBox from "@tabler/icons-react-native/IconBox";
@@ -60,6 +61,7 @@ import IconDotsCircleHorizontal from "@tabler/icons-react-native/IconDotsCircleH
 import IconEdit from "@tabler/icons-react-native/IconEdit";
 import IconExternalLink from "@tabler/icons-react-native/IconExternalLink";
 import IconEyeOff from "@tabler/icons-react-native/IconEyeOff";
+import IconZzz from "@tabler/icons-react-native/IconZzz";
 import IconEye from "@tabler/icons-react-native/IconEye";
 import IconFileText from "@tabler/icons-react-native/IconFileText";
 import IconFileDiff from "@tabler/icons-react-native/IconFileDiff";
@@ -175,6 +177,7 @@ const ANDROID_ICON_BY_SF_SYMBOL = {
   archivebox: IconArchive,
   "archivebox.fill": IconArchive,
   "bell.badge": IconBellRinging,
+  "bell.slash": IconBellOff,
   "bolt.circle": IconBolt,
   "bolt.horizontal.circle": IconBolt,
   brain: IconBrain,
@@ -217,6 +220,7 @@ const ANDROID_ICON_BY_SF_SYMBOL = {
   "exclamationmark.circle": IconAlertCircle,
   eye: IconEye,
   "eye.slash": IconEyeOff,
+  "moon.zzz": IconZzz,
   flask: IconFlask,
   folder: IconFolder,
   "folder.badge.plus": IconFolderPlus,

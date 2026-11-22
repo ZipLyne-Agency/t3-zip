@@ -6,6 +6,11 @@ export interface WorkspaceListHeaderProps {
   readonly accessibilityLabel: string;
   /** The connection status beside the brand opens environment settings. */
   readonly onOpenEnvironments: () => void;
+  /**
+   * Android phone Home: the project switcher takes the brand's place, with a connection icon
+   * only while the connection is in trouble. The sidebar column keeps the brand.
+   */
+  readonly projectSwitcher?: boolean;
   readonly search: {
     readonly value: string;
     readonly onChangeText: (value: string) => void;

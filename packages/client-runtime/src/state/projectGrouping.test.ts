@@ -8,6 +8,7 @@ import {
   deriveLogicalProjectKeyFromSettings,
   pickableProjectGroups,
   derivePhysicalProjectKey,
+  resolveGroupDefaultProject,
   resolveScratchProjectScopeKey,
   sortProjectsByGroupOrder,
   type ProjectGroupingSettings,
@@ -265,6 +266,54 @@ describe("buildProjectGroups", () => {
     }
   });
 
+  it("represents a repository group by its root checkout, even when it was added last", () => {
+    const remoteEnvironmentId = EnvironmentId.make("remote");
+    const local = { ...repositoryIdentity, rootPath: "/work/workspace" };
+    const remote = { ...repositoryIdentity, rootPath: "/srv/workspace" };
+    const archivedTool = makeProject("old-tool", "/work/workspace/_archive/old-tool", {
+      repositoryIdentity: local,
+    });
+    const app = makeProject("app-a", "/work/workspace/app-a", { repositoryIdentity: local });
+    const remoteApp = makeProject("remote-app", "/srv/workspace/app-a", {
+      environmentId: remoteEnvironmentId,
+      repositoryIdentity: remote,
+    });
+    const remoteRoot = makeProject("remote-root", "/srv/workspace", {
+      environmentId: remoteEnvironmentId,
+      repositoryIdentity: remote,
+    });
+    const root = makeProject("workspace", "/work/workspace", { repositoryIdentity: local });
+    const representativeOf = (
+      projects: ReadonlyArray<EnvironmentProject>,
+      preferredEnvironmentId: EnvironmentId | null = null,
+    ) =>
+      buildProjectGroups({ projects, settings: settings("repository"), preferredEnvironmentId })[0]
+        ?.representative.id;
+
+    expect(representativeOf([archivedTool, app, root])).toBe("workspace");
+    expect(representativeOf([archivedTool, app, remoteApp, remoteRoot, root], environmentId)).toBe(
+      "workspace",
+    );
+    expect(
+      representativeOf([archivedTool, app, remoteApp, remoteRoot, root], remoteEnvironmentId),
+    ).toBe("remote-root");
+    // A local root is not worth leaving the current environment for.
+    expect(representativeOf([archivedTool, root, remoteApp], remoteEnvironmentId)).toBe(
+      "remote-app",
+    );
+    expect(representativeOf([archivedTool, app])).toBe("old-tool");
+
+    // A new thread with no current or last-used project starts from the first project's group.
+    const all = [archivedTool, app, remoteApp, remoteRoot, root];
+    expect(resolveGroupDefaultProject(archivedTool, all, settings("repository")).id).toBe(
+      "workspace",
+    );
+    expect(resolveGroupDefaultProject(remoteApp, all, settings("repository")).id).toBe(
+      "remote-root",
+    );
+    expect(resolveGroupDefaultProject(archivedTool, all, settings("separate")).id).toBe("old-tool");
+  });
+
   it("keeps a fork apart from its upstream checkout and labels it by its own remote", () => {
     const fork = makeProject("fork", "/work/t3code-fork", {
       repositoryIdentity: {
@@ -492,5 +541,61 @@ describe("sortProjectsByGroupOrder", () => {
       ],
     );
     expect(sorted.map((entry) => entry.id)).toEqual(["pinned", "recent", "archived", "unlisted"]);
+  });
+});
+
+// T3 Zip: the desktop rail and the phone key the shared project rail by group key.
+describe("project rail keys across desktop and phone", () => {
+  const remote = EnvironmentId.make("remote");
+  const projects = [
+    makeProject("app", "/local/repo"),
+    makeProject("app-remote", "/remote/repo", {
+      environmentId: remote,
+      repositoryIdentity: { ...repositoryIdentity, rootPath: "/remote/repo" },
+    }),
+    makeProject("notes", "/local/notes", { repositoryIdentity: null }),
+    makeProject("scratch", "/local/scratch", { isScratch: true, repositoryIdentity: null }),
+  ];
+  const keysOf = (input: Parameters<typeof buildProjectGroups>[0]) =>
+    new Map(
+      buildProjectGroups(input).flatMap((group) =>
+        group.members.map((member) => [member.physicalProjectKey, group.key] as const),
+      ),
+    );
+
+  it.each(["repository", "repository_path", "separate"] as const)(
+    "gives a project the same key on both with the same grouping (%s), whatever the phone's environment filter",
+    (mode) => {
+      // Desktop: every environment, preferring its primary; phone: one environment, no overrides.
+      const desktop = keysOf({
+        projects,
+        settings: settings(mode),
+        preferredEnvironmentId: environmentId,
+        groupScratchProjects: true,
+      });
+      const phone = keysOf({
+        projects: projects.filter((project) => project.environmentId === environmentId),
+        settings: settings(mode, {}),
+        groupScratchProjects: true,
+      });
+      for (const [physicalKey, key] of phone) expect(desktop.get(physicalKey)).toBe(key);
+    },
+  );
+
+  it("gives different keys when one device groups differently", () => {
+    const desktop = keysOf({
+      projects,
+      settings: settings("repository", {
+        [derivePhysicalProjectKey(projects[0]!)]: "separate",
+      }),
+      groupScratchProjects: true,
+    });
+    const phone = keysOf({
+      projects,
+      settings: settings("repository"),
+      groupScratchProjects: true,
+    });
+    const app = derivePhysicalProjectKey(projects[0]!);
+    expect(desktop.get(app)).not.toBe(phone.get(app));
   });
 });

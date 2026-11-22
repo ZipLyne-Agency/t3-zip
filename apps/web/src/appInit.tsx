@@ -45,6 +45,7 @@ import {
   startModelPreferencesMigration,
   subscribeClientSettings,
 } from "./hooks/useSettings";
+import { startProjectRailSync } from "./components/rail/railSync";
 import { syncBrowserChromeTheme } from "./hooks/useTheme";
 import { startThreadVisitedMigration } from "./hooks/useThreadVisitedMigration";
 import { installDesktopPasteAsText } from "./lib/desktopPasteAsText";
@@ -277,6 +278,8 @@ export function startAppServices(): AppRouter {
   startBrowserChromeThemeSync(router);
   startDefaultThemeAdoption();
   startModelPreferencesMigration();
+  // T3 Zip: the project rail's folders and order, shared with the phone through the server.
+  startProjectRailSync();
   startAgentOpenedPreviews();
   if (isElectron) startElectronBrowserHost();
   startPreviewTitleRecording();

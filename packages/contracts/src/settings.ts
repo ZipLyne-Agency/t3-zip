@@ -321,6 +321,13 @@ export const BrowserLinkTarget = Schema.Literals(["system", "app"]);
 export type BrowserLinkTarget = typeof BrowserLinkTarget.Type;
 export const DEFAULT_BROWSER_LINK_TARGET: BrowserLinkTarget = "system";
 /**
+ * Where a plain click opens a subagent, a side chat or a linked environment's thread: beside the
+ * thread you are in, or in its place. A modified click opens it in the other one.
+ */
+export const SideThreadOpenTarget = Schema.Literals(["panel", "main"]);
+export type SideThreadOpenTarget = typeof SideThreadOpenTarget.Type;
+const DEFAULT_SIDE_THREAD_OPEN_TARGET: SideThreadOpenTarget = "panel";
+/**
  * What the address bar searches with when the input is not an address.
  * "custom" uses `browserCustomSearchUrl`, a template with `%s` for the query.
  */
@@ -529,6 +536,9 @@ export const ClientSettingsSchema = Schema.Struct({
   ),
   followUpBehavior: Schema.Literals(["queue", "steer"]).pipe(
     Schema.withDecodingDefault(Effect.succeed("steer")),
+  ),
+  sideThreadOpenTarget: SideThreadOpenTarget.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_SIDE_THREAD_OPEN_TARGET)),
   ),
   proactivePanelsEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   showSkillsInSlashMenu: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
@@ -1357,6 +1367,32 @@ export const StorageCleanupSettings = Schema.Struct({
 });
 export type StorageCleanupSettings = typeof StorageCleanupSettings.Type;
 
+// T3 Zip: project rail layout shared between the desktop rail and the phone. Begin.
+/**
+ * The project rail's folders, order, favorites, hidden and snoozed projects, keyed by the
+ * sidebar project group key (`p:<key>` and `f:<folderId>` entries at the top level, bare keys
+ * inside a folder). Whether a folder is folded stays on each device and is not shared.
+ * Writers send the whole value and the last write wins.
+ */
+export const ProjectRailFolderSettings = Schema.Struct({
+  name: Schema.String,
+  projects: Schema.Array(Schema.String),
+});
+export const ProjectRailSettings = Schema.Struct({
+  layout: Schema.Struct({
+    top: Schema.Array(Schema.String),
+    folders: Schema.Record(Schema.String, ProjectRailFolderSettings),
+  }),
+  favoriteProjects: Schema.Array(Schema.String),
+  hiddenProjects: Schema.Array(Schema.String),
+  /** Project key to the ISO time it comes back. */
+  snoozedProjects: Schema.Record(Schema.String, Schema.String),
+  /** ISO time the writer made this value. */
+  updatedAt: Schema.String,
+});
+export type ProjectRailSettings = typeof ProjectRailSettings.Type;
+// T3 Zip: project rail layout. End.
+
 const UsageHistoryRetentionDays = Schema.Union([
   Schema.Int.check(Schema.isGreaterThan(0)),
   Schema.Literal("unlimited"),
@@ -1613,6 +1649,9 @@ export const ServerSettings = Schema.Struct({
 
   /** Sent by the Usage tab with each summary request to this environment; edit in settings.json. Invalid values are ignored. */
   usageModelFilter: ForwardCompatibleOptional(UsageModelFilter),
+
+  // T3 Zip: shared project rail layout; unset until a client seeds it. Unreadable values are ignored.
+  projectRail: ForwardCompatibleOptional(ProjectRailSettings),
 });
 export type ServerSettings = typeof ServerSettings.Type;
 
@@ -2001,6 +2040,10 @@ export const ServerSettingsPatch = Schema.Struct({
   usageModelAliases: Schema.optionalKey(
     Schema.Record(TrimmedNonEmptyString, Schema.NullOr(TrimmedNonEmptyString)),
   ),
+
+  // T3 Zip: replaces the whole shared project rail value (last write wins). Undefined, as the
+  // settings value types it, changes nothing.
+  projectRail: Schema.optional(ProjectRailSettings),
 });
 export type ServerSettingsPatch = typeof ServerSettingsPatch.Type;
 
@@ -2109,6 +2152,7 @@ export const ClientSettingsPatch = Schema.Struct({
   composerRichTextEnabled: Schema.optionalKey(Schema.Boolean),
   sendShortcut: Schema.optionalKey(Schema.Literals(["enter", "mod-enter-multiline", "mod-enter"])),
   followUpBehavior: Schema.optionalKey(Schema.Literals(["queue", "steer"])),
+  sideThreadOpenTarget: Schema.optionalKey(SideThreadOpenTarget),
   proactivePanelsEnabled: Schema.optionalKey(Schema.Boolean),
   showSkillsInSlashMenu: Schema.optionalKey(Schema.Boolean),
   boringSidebarEnabled: Schema.optionalKey(Schema.Boolean),

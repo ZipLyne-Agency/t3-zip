@@ -15,6 +15,15 @@ import {
   threadListV2LayoutTime,
 } from "./threadListV2";
 import { computeThreadMoveAvailability } from "./threadOrder";
+import type {
+  ThreadDoneClears,
+  ThreadListStatusFilter,
+} from "../../persistence/mobile-preferences";
+import {
+  buildThreadStatusEntries,
+  buildThreadStatusListItems,
+  countThreadStatusEntries,
+} from "./threadStatusFilterList";
 
 /**
  * Screens' select handlers read the content-only key set; a fresh one per list rebuild gave
@@ -69,6 +78,10 @@ export function useThreadListV2(input: {
   readonly snoozedShelfExpanded: boolean;
   readonly settledShelfExpanded: boolean;
   readonly selectedThreadKey: string | null;
+  /** Which threads to list; a search lists every match whatever the filter. */
+  readonly statusFilter?: ThreadListStatusFilter;
+  /** Done's clear marks on this device; null until they load. */
+  readonly doneClears?: ThreadDoneClears | null;
 }) {
   const { threads, workingShelfEnabled } = input;
   const layoutTime = useMemo(
@@ -254,11 +267,94 @@ export function useThreadListV2(input: {
       input.shelfPreferencesLoaded,
     ],
   );
-  return { layout, items, contentOnlyThreadKeys, olderSettledShelf };
+  // The status filters count and list the open threads in scope by the desktop's rules. Every
+  // project's entries come first, so the project switcher counts each project by the same rules.
+  const environmentStatusEntries = useMemo(
+    () =>
+      buildThreadStatusEntries({
+        threads: threads.filter(
+          (thread) => input.environmentId === null || thread.environmentId === input.environmentId,
+        ),
+        now: layoutTime,
+        clears: input.doneClears ?? null,
+        settlementEnvironmentIds: input.settlementEnvironmentIds,
+        snoozeEnvironmentIds: input.snoozeEnvironmentIds,
+        queuedThreadKeys: input.queuedThreadKeys,
+      }),
+    [
+      threads,
+      input.environmentId,
+      layoutTime,
+      input.doneClears,
+      input.settlementEnvironmentIds,
+      input.snoozeEnvironmentIds,
+      input.queuedThreadKeys,
+    ],
+  );
+  const statusEntries = useMemo(() => {
+    if (input.projectRefs == null) return environmentStatusEntries;
+    const projectKeys = new Set(
+      input.projectRefs.map((ref) => `${ref.environmentId}:${ref.projectId}`),
+    );
+    return environmentStatusEntries.filter((entry) =>
+      projectKeys.has(`${entry.thread.environmentId}:${entry.thread.projectId}`),
+    );
+  }, [environmentStatusEntries, input.projectRefs]);
+  const statusCounts = useMemo(() => countThreadStatusEntries(statusEntries), [statusEntries]);
+  const statusFilter = input.statusFilter ?? "all";
+  const searching = input.searchQuery.trim().length > 0;
+  const filteredItems = useMemo(() => {
+    if (statusFilter === "all" || searching) return null;
+    const rows = buildThreadStatusListItems({
+      entries: statusEntries,
+      filter: statusFilter,
+      now: layoutTime,
+      decorate: (listed) =>
+        buildThreadListV2ListItems({
+          items: listed,
+          pendingTasks: [],
+          snoozeLabelNow: `${input.now.slice(0, 16)}:00.000Z`,
+          snoozeEnvironmentIds: input.snoozeEnvironmentIds,
+          ...(input.muteEnvironmentIds ? { muteEnvironmentIds: input.muteEnvironmentIds } : {}),
+          queuedThreadKeys: input.queuedThreadKeys,
+          resolve: keepMarked,
+        }),
+    });
+    // A new task is about to run, so it lists under Working too.
+    if (statusFilter !== "working") return rows;
+    const pendingRows = buildThreadListV2ListItems({
+      items: [],
+      pendingTasks,
+      resolve: keepMarked,
+    });
+    return [...pendingRows, ...rows];
+  }, [
+    statusFilter,
+    searching,
+    statusEntries,
+    layoutTime,
+    input.now,
+    input.snoozeEnvironmentIds,
+    input.muteEnvironmentIds,
+    input.queuedThreadKeys,
+    pendingTasks,
+  ]);
+  return {
+    layout,
+    items: filteredItems ?? items,
+    contentOnlyThreadKeys,
+    olderSettledShelf,
+    statusEntries,
+    /** The open threads of every project in the environment scope, for the project switcher. */
+    environmentStatusEntries,
+    statusCounts,
+    /** The filter the list applies now: All while searching. */
+    appliedStatusFilter: searching ? ("all" as const) : statusFilter,
+  };
 }
 
 /** The list's scope per environment: its projects there, or every project. */
-function olderSettledScopes(input: {
+export function olderSettledScopes(input: {
   readonly environmentId: EnvironmentId | null;
   readonly projectRefs: LayoutInput["projectRefs"];
   readonly settlementEnvironmentIds: ReadonlySet<EnvironmentId>;
