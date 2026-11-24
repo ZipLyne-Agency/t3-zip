@@ -161,8 +161,10 @@ function ThreadTabs(props: ThreadTabsProps) {
 
   // Settle from the thread itself (its shortcut or status line) moves on to the next tab, like
   // closing the tab, instead of leaving you on the settled thread.
-  const { settleThread } = useThreadActions();
-  const settleAndAdvance = useStableCallback((ref: ScopedThreadRef) => {
+  const { settleThread, confirmSettle } = useThreadActions();
+  const settleAndAdvance = useStableCallback(async (ref: ScopedThreadRef) => {
+    // Ask before moving to the next tab, so Cancel leaves you where you were.
+    if (!(await confirmSettle([ref]))) return;
     const key = scopedThreadKey(ref);
     const closing = key === routeKey ? tabs.find((tab) => tab.key === key) : undefined;
     if (key === routeKey) {
@@ -174,8 +176,8 @@ function ThreadTabs(props: ThreadTabsProps) {
         tabs,
       );
     }
-    const reopen = closing ? { onUndone: () => void openTab(closing) } : undefined;
-    void settleThread(ref, reopen).then((result) =>
+    const reopen = closing ? { onUndone: () => void openTab(closing) } : {};
+    void settleThread(ref, { automationsConfirmed: true, ...reopen }).then((result) =>
       reportThreadActionFailure(m(msg("Failed to settle thread")), result),
     );
   });

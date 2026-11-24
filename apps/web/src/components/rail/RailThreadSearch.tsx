@@ -8,10 +8,20 @@ import {
   threadSearchSubject,
   type ShownOrder,
 } from "@t3tools/client-runtime/state/thread-search";
+import {
+  searchRailProjects,
+  type RailProjectAway,
+} from "@t3tools/client-runtime/state/project-rail";
 import type { ScopedThreadRef } from "@t3tools/contracts";
 import { foldSearchQuery, rankMessageMatches } from "@t3tools/shared/paletteSearch";
 import { useGT } from "gt-react";
-import { useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
+import {
+  useId,
+  useRef,
+  useState,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type ReactNode,
+} from "react";
 
 import { useSidebarProjectGroups } from "../../hooks/useSidebarProjectGroups";
 import { useSidebarPendingFileDropStore } from "../../sidebarPendingFileDropStore";
@@ -27,20 +37,57 @@ import { searchSidebarThreads } from "../Sidebar.logic";
 import { SidebarSearchResultRow } from "../sidebar/SidebarThreadRow";
 import { TooltipProvider } from "../ui/tooltip";
 import { EMPTY_RAIL_PROVIDER_ENTRIES, railProviderEntriesAtom } from "./railProviderEntries";
+import { RailSearchProjectRow } from "./RailRows";
+import type { RailProject } from "./useRailModel";
 
+// The search field points at these ids (see `SidebarThreadHeader`), counting across both sections.
 const resultId = (index: number) => `sidebar-thread-search-result-${index}`;
+const projectResultKey = (projectKey: string) => `project:${projectKey}`;
+const threadResultKey = (threadKey: string) => `thread:${threadKey}`;
+
+type RailSearchResult =
+  | { readonly kind: "project"; readonly key: string; readonly project: RailProject }
+  | { readonly kind: "thread"; readonly key: string; readonly thread: EnvironmentThreadShell };
+
+function RailSearchSection(props: { title: string; count: number; children: ReactNode }) {
+  const headingId = useId();
+  return (
+    <div role="group" aria-labelledby={headingId} className="flex flex-col">
+      <div
+        id={headingId}
+        className="flex h-6 items-center gap-1.5 px-2.5 text-xs font-medium text-sidebar-muted-foreground"
+      >
+        <span className="truncate">{props.title}</span>
+        <span className="shrink-0 tabular-nums text-sidebar-muted-foreground/70">
+          {props.count}
+        </span>
+      </div>
+      <ul role="presentation" className="flex flex-col gap-px">
+        {props.children}
+      </ul>
+    </div>
+  );
+}
 
 /**
- * The classic sidebar's thread search, for the rail: the same field, the same ranking of
- * titles and then message matches across environments, the same result rows, and the same
- * keys (Up and Down move, Enter opens, Escape clears). Results replace the project list while
- * a query is typed, as they replace the thread list in the classic sidebar.
+ * The rail's search: projects by name (hidden and snoozed too), then threads as the classic
+ * sidebar finds them. Two sections, one list for the keys (Up and Down, Enter, Escape). Opening
+ * a result hands it to the rail, which brings its project back.
  */
 export function useRailThreadSearch(input: {
   readonly searchableThreads: readonly EnvironmentThreadShell[];
   readonly settledThreadKeys: ReadonlySet<string>;
   readonly routeThreadKey: string | null;
   readonly navigateToThread: (threadRef: ScopedThreadRef) => Promise<void> | void;
+  /** Every project, hidden and snoozed ones too, in rail order. */
+  readonly projects: readonly RailProject[];
+  readonly favoriteProjectKeys: readonly string[];
+  readonly selectedProjectKey: string | null;
+  readonly projectAway: (projectKey: string) => RailProjectAway | null;
+  readonly awayLabel: (away: RailProjectAway) => string;
+  readonly openProject: (projectKey: string) => void;
+  /** Called as a thread result opens, before the route changes. */
+  readonly onOpenThread: (thread: EnvironmentThreadShell) => void;
 }) {
   const gt = useGT();
   const inputRef = useRef<HTMLInputElement>(null);
@@ -109,7 +156,22 @@ export function useRailThreadSearch(input: {
     query,
     new Set(messageOrder.keys),
   );
-  const results = [...titleMatches, ...contentMatches];
+  const threadResults = [...titleMatches, ...contentMatches];
+  const projectResults = isSearching
+    ? searchRailProjects(input.projects, query, (project) => project.group.displayName)
+    : [];
+  const results: RailSearchResult[] = [
+    ...projectResults.map((project) => ({
+      kind: "project" as const,
+      key: projectResultKey(project.group.projectKey),
+      project,
+    })),
+    ...threadResults.map((thread) => ({
+      kind: "thread" as const,
+      key: threadResultKey(scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id))),
+      thread,
+    })),
+  ];
   const matchByKey = new Map(
     contentMatches.flatMap((thread) => {
       const key = threadSearchMatchKey({
@@ -120,17 +182,19 @@ export function useRailThreadSearch(input: {
       return match ? [[key, match] as const] : [];
     }),
   );
-  const resultKeys = results.map((thread) =>
-    scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
-  );
-  // The highlight follows its thread, so rows that arrive late do not move it under Enter.
+  const resultKeys = results.map((result) => result.key);
+  // The highlight follows its row, so rows that arrive late do not move it under Enter.
   const activeIndex = Math.max(0, highlightKey === null ? 0 : resultKeys.indexOf(highlightKey));
 
   const clear = () => {
     setQuery("");
     setHighlightKey(null);
   };
-  const select = (thread: EnvironmentThreadShell) => {
+  const selectProject = (project: RailProject) => {
+    clear();
+    input.openProject(project.group.projectKey);
+  };
+  const selectThread = (thread: EnvironmentThreadShell) => {
     const ref = scopeThreadRef(thread.environmentId, thread.id);
     // A row listed for a message match opens find on it, as the palette does.
     const match = matchByKey.get(
@@ -138,6 +202,7 @@ export function useRailThreadSearch(input: {
     );
     const matchQuery = threadSearch.query;
     clear();
+    input.onOpenThread(thread);
     void input.navigateToThread(ref);
     if (match) openThreadFindOnQuery(scopedThreadKey(ref), findForMessageMatch(match, matchQuery));
   };
@@ -159,7 +224,8 @@ export function useRailThreadSearch(input: {
     if (event.key === "Enter") {
       event.preventDefault();
       const result = results[activeIndex];
-      if (result) select(result);
+      if (result?.kind === "project") selectProject(result.project);
+      else if (result) selectThread(result.thread);
     }
   };
   const onFileDropThreads = (threadRef: ScopedThreadRef, files: File[]) => {
@@ -172,55 +238,85 @@ export function useRailThreadSearch(input: {
   const resultsList = !isSearching ? null : results.length > 0 ? (
     <TooltipProvider delay={150} closeDelay={0} timeout={400}>
       <DndContext autoScroll={false}>
-        <ul
+        <div
           id="sidebar-thread-search-results"
           role="listbox"
-          aria-label={gt("Thread search results")}
-          className="flex flex-col gap-px"
+          aria-label={gt("Search results")}
+          className="flex flex-col gap-3"
         >
-          {results.map((thread, index) => {
-            const threadKey = resultKeys[index]!;
-            const memberKey = `${thread.environmentId}:${thread.projectId}` as const;
-            return (
-              <SidebarSearchResultRow
-                key={threadKey}
-                isSettled={input.settledThreadKeys.has(threadKey)}
-                thread={thread}
-                project={projectByKey.get(memberKey) ?? null}
-                projectDisplayName={projectDisplayNameByKey.get(memberKey) ?? null}
-                environmentLabel={environmentLabelById.get(thread.environmentId) ?? null}
-                environmentMachine={environmentMachineById.get(thread.environmentId) ?? "server"}
-                providerEntryByInstanceId={
-                  providerEntriesByEnvironment.get(thread.environmentId) ??
-                  EMPTY_RAIL_PROVIDER_ENTRIES
-                }
-                isHighlighted={activeIndex === index}
-                isRouteActive={input.routeThreadKey === threadKey}
-                resultId={resultId(index)}
-                searchMatch={
-                  matchByKey.get(
-                    threadSearchMatchKey({
-                      environmentId: thread.environmentId,
-                      threadId: thread.id,
-                    }),
-                  ) ?? null
-                }
-                searchQuery={query}
-                searchMatchQuery={threadSearch.query}
-                onHighlight={() => setHighlightKey(threadKey)}
-                onSelect={() => select(thread)}
-                // The rail has no thread context menu; right-click on a result does nothing here.
-                onContextMenu={() => {}}
-                onFileDropThreads={onFileDropThreads}
-              />
-            );
-          })}
-        </ul>
+          {projectResults.length > 0 ? (
+            <RailSearchSection title={gt("Projects")} count={projectResults.length}>
+              {projectResults.map((project, index) => {
+                const projectKey = project.group.projectKey;
+                const away = input.projectAway(projectKey);
+                return (
+                  <RailSearchProjectRow
+                    key={projectKey}
+                    project={project}
+                    favorite={input.favoriteProjectKeys.includes(projectKey)}
+                    awayLabel={away === null ? null : input.awayLabel(away)}
+                    resultId={resultId(index)}
+                    highlighted={activeIndex === index}
+                    selected={input.selectedProjectKey === projectKey}
+                    onHighlight={() => setHighlightKey(projectResultKey(projectKey))}
+                    onSelect={() => selectProject(project)}
+                  />
+                );
+              })}
+            </RailSearchSection>
+          ) : null}
+          {threadResults.length > 0 ? (
+            <RailSearchSection title={gt("Threads")} count={threadResults.length}>
+              {threadResults.map((thread, threadIndex) => {
+                const index = projectResults.length + threadIndex;
+                const threadKey = scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
+                const memberKey = `${thread.environmentId}:${thread.projectId}` as const;
+                return (
+                  <SidebarSearchResultRow
+                    key={threadKey}
+                    isSettled={input.settledThreadKeys.has(threadKey)}
+                    thread={thread}
+                    project={projectByKey.get(memberKey) ?? null}
+                    projectDisplayName={projectDisplayNameByKey.get(memberKey) ?? null}
+                    environmentLabel={environmentLabelById.get(thread.environmentId) ?? null}
+                    environmentMachine={
+                      environmentMachineById.get(thread.environmentId) ?? "server"
+                    }
+                    providerEntryByInstanceId={
+                      providerEntriesByEnvironment.get(thread.environmentId) ??
+                      EMPTY_RAIL_PROVIDER_ENTRIES
+                    }
+                    isHighlighted={activeIndex === index}
+                    isRouteActive={input.routeThreadKey === threadKey}
+                    resultId={resultId(index)}
+                    searchMatch={
+                      matchByKey.get(
+                        threadSearchMatchKey({
+                          environmentId: thread.environmentId,
+                          threadId: thread.id,
+                        }),
+                      ) ?? null
+                    }
+                    searchQuery={query}
+                    searchMatchQuery={threadSearch.query}
+                    onHighlight={() => setHighlightKey(threadResultKey(threadKey))}
+                    onSelect={() => selectThread(thread)}
+                    // The rail has no thread context menu; right-click on a result does nothing here.
+                    onContextMenu={() => {}}
+                    onFileDropThreads={onFileDropThreads}
+                  />
+                );
+              })}
+            </RailSearchSection>
+          ) : null}
+        </div>
       </DndContext>
     </TooltipProvider>
   ) : (
     <p role="status" className="px-2 py-6 text-center text-xs text-sidebar-muted-foreground">
-      {threadSearch.isPending ? gt("Searching thread messages…") : gt("No threads found")}
+      {threadSearch.isPending
+        ? gt("Searching thread messages…")
+        : gt("No projects or threads found")}
     </p>
   );
 

@@ -3,9 +3,12 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   ALL_PROJECTS_SCOPE,
   buildThreadColumnSections,
+  buildWorkingDoneHalves,
   countThreadColumnFilters,
   groupThreadColumnItemsByProject,
   nextThreadAfterRemoval,
+  resolveColumnDraftedKeys,
+  resolveThreadColumnFilter,
   resolveThreadColumnScope,
   threadColumnFits,
   type ThreadColumnItem,
@@ -162,6 +165,123 @@ describe("buildThreadColumnSections", () => {
 
   it("counts each filter without drafts", () => {
     expect(countThreadColumnFilters(items)).toEqual({ waiting: 2, working: 1, done: 2 });
+  });
+});
+
+describe("buildWorkingDoneHalves", () => {
+  const items = [
+    item("idle", { status: "idle" }),
+    item("ask", { status: "needs" }),
+    item("run-old", { status: "working", sinceMs: NOW - 2 * HOUR }),
+    item("run-new", { status: "working", sinceMs: NOW - HOUR }),
+    item("fresh", { status: "done" }),
+    item("seen", { status: "idle", doneSection: "opened" }),
+    item("draft", { kind: "draft" }),
+    item("finished-with-text", { status: "done", hasDraft: true }),
+  ];
+
+  it("puts Done (New, then Opened) on top and Working with its drafts below", () => {
+    const halves = buildWorkingDoneHalves(items, NOW);
+    expect(ids(halves.done)).toEqual([
+      ["new", ["fresh"]],
+      ["opened", ["seen"]],
+    ]);
+    expect(ids(halves.working)).toEqual([
+      ["working", ["run-new", "run-old"]],
+      ["drafts", ["draft", "finished-with-text"]],
+    ]);
+  });
+
+  it("lists a draft once, and leaves out what neither half holds", () => {
+    const halves = buildWorkingDoneHalves(items, NOW);
+    const listed = [...halves.done, ...halves.working].flatMap((section) =>
+      section.items.map((entry) => entry.key),
+    );
+    expect(listed).toHaveLength(new Set(listed).size);
+    expect(listed).not.toContain("idle");
+    expect(listed).not.toContain("ask");
+  });
+
+  it("leaves a half empty when it has nothing", () => {
+    const halves = buildWorkingDoneHalves([item("run", { status: "working" })], NOW);
+    expect(halves.done).toEqual([]);
+    expect(ids(halves.working)).toEqual([["working", ["run"]]]);
+  });
+});
+
+describe("resolveThreadColumnFilter", () => {
+  it("combines Working or Done into one tab in a single project", () => {
+    for (const filter of ["working", "done"] as const) {
+      expect(
+        resolveThreadColumnFilter({
+          picked: { scope: "p:a", filter },
+          scope: "p:a",
+        }),
+      ).toBe("workingDone");
+    }
+  });
+
+  it("combines Working or Done into one tab in All Projects and No Project too", () => {
+    for (const scope of [ALL_PROJECTS_SCOPE, "p:scratch"]) {
+      for (const filter of ["working", "done", "workingDone"] as const) {
+        expect(resolveThreadColumnFilter({ picked: { scope, filter }, scope })).toBe("workingDone");
+      }
+    }
+  });
+
+  it("opens another scope on All, or on Waiting for All Projects", () => {
+    const picked = { scope: "p:a", filter: "workingDone" } as const;
+    expect(resolveThreadColumnFilter({ picked, scope: "p:b" })).toBe("all");
+    expect(resolveThreadColumnFilter({ picked, scope: ALL_PROJECTS_SCOPE })).toBe("waiting");
+    expect(
+      resolveThreadColumnFilter({
+        picked: { scope: ALL_PROJECTS_SCOPE, filter: "all" },
+        scope: ALL_PROJECTS_SCOPE,
+      }),
+    ).toBe("waiting");
+  });
+});
+
+describe("resolveColumnDraftedKeys", () => {
+  /** Opens threads in turn, as clicking rows does, and lists Drafts after each. */
+  function clickThrough(steps: ReadonlyArray<{ route: string | null; unsent: string[] }>) {
+    let latch: Parameters<typeof resolveColumnDraftedKeys>[2] = null;
+    return steps.map(({ route, unsent }) => {
+      const result = resolveColumnDraftedKeys(new Set(unsent), route, latch);
+      latch = result.latch;
+      return [...result.draftedKeys].toSorted();
+    });
+  }
+
+  it("keeps a drafted thread under Drafts when it is clicked and when another row is", () => {
+    expect(
+      clickThrough([
+        { route: null, unsent: ["a"] },
+        { route: "a", unsent: ["a"] },
+        { route: "b", unsent: ["a"] },
+        { route: "a", unsent: ["a"] },
+      ]),
+    ).toEqual([["a"], ["a"], ["a"], ["a"]]);
+  });
+
+  it("does not move the open thread while you type in it or send", () => {
+    expect(
+      clickThrough([
+        // Opened with no draft, then typed in: it stays where it was until you leave it.
+        { route: "c", unsent: [] },
+        { route: "c", unsent: ["c"] },
+        { route: "b", unsent: ["c"] },
+        // Opened from Drafts, then sent: it stays under Drafts until you leave it.
+        { route: "c", unsent: ["c"] },
+        { route: "c", unsent: [] },
+        { route: "b", unsent: [] },
+      ]),
+    ).toEqual([[], [], ["c"], ["c"], ["c"], []]);
+  });
+
+  it("returns the same latch while the open thread stays", () => {
+    const first = resolveColumnDraftedKeys(new Set(["a"]), "a", null);
+    expect(resolveColumnDraftedKeys(new Set(["a", "b"]), "a", first.latch).latch).toBe(first.latch);
   });
 });
 

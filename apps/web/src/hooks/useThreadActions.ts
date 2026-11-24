@@ -44,6 +44,7 @@ import { releaseComposerDraftUploads } from "../lib/composerDraftUploads";
 import { announce } from "../lib/announce";
 import { m } from "../i18n/messages";
 import { readLocalApi } from "../localApi";
+import { confirmSettleWithAutomations } from "../settleAutomationGate";
 import {
   readDelegatedUnderParent,
   readEnvironmentServerConfigLoaded,
@@ -889,13 +890,21 @@ export function useThreadActions() {
     return result;
   };
 
+  /** Warns before settling threads that automations still post into; false means cancelled. */
+  const confirmSettle = (targets: ReadonlyArray<ScopedThreadRef>) =>
+    confirmSettleWithAutomations(targets);
+
   /**
    * `onUndone` runs after Undo restores the thread, so a closed tab can reopen it. When one
    * Undo restores several settled threads, only the newest settle's `onUndone` runs.
    */
   const settleThread = async (
     target: ScopedThreadRef,
-    options?: { readonly onUndone?: () => void },
+    options?: {
+      readonly onUndone?: () => void;
+      /** The caller already asked with `confirmSettle`, before it moved on to the next thread. */
+      readonly automationsConfirmed?: boolean;
+    },
   ) => {
     if (!readEnvironmentServerConfigLoaded(target.environmentId)) {
       return AsyncResult.failure(
@@ -906,6 +915,10 @@ export function useThreadActions() {
           }),
         ),
       );
+    }
+    // Cancel is an interrupt, which callers treat as "nothing happened": no toast, no advance.
+    if (options?.automationsConfirmed !== true && !(await confirmSettle([target]))) {
+      return AsyncResult.failure(Cause.interrupt());
     }
     const resolved = resolveThreadTarget(target);
     // oxlint-disable-next-line react/purity -- runs in an event handler (oxc#27309)
@@ -1110,6 +1123,7 @@ export function useThreadActions() {
     deleteThread,
     confirmAndDeleteThread,
     settleThread,
+    confirmSettle,
     unsettleThread,
     snoozeThread,
     unsnoozeThread,

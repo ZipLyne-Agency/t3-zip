@@ -20,11 +20,14 @@ export class FileSaveCoordinator<A = unknown, E = unknown> {
   private saving = false;
   private disposed = false;
   private flushing = false;
+  // T3 Zip: rename and delete in the Files panel wait for writes to finish, or drop them.
+  private discarded = false;
+  private settleWaiters: (() => void)[] = [];
 
   constructor(private readonly options: FileSaveCoordinatorOptions<A, E>) {}
 
   change(contents: string): void {
-    if (this.disposed) return;
+    if (this.disposed || this.discarded) return;
     this.latestContents = contents;
     this.latestRevision += 1;
     this.lastChangeAt = Date.now();
@@ -34,7 +37,9 @@ export class FileSaveCoordinator<A = unknown, E = unknown> {
 
   /** The newest contents not yet written, which is the last write this coordinator will make. */
   get unconfirmedContents(): string | null {
-    return this.latestRevision === this.confirmedRevision ? null : this.latestContents;
+    return this.discarded || this.latestRevision === this.confirmedRevision
+      ? null
+      : this.latestContents;
   }
 
   /** Writes the newest draft now instead of after the debounce, then any draft queued behind it. */
@@ -42,6 +47,24 @@ export class FileSaveCoordinator<A = unknown, E = unknown> {
     this.clearTimer();
     this.flushing = true;
     void this.persistLatest();
+  }
+
+  /** T3 Zip: flushes and resolves once no write is running or scheduled. */
+  flushAndSettle(): Promise<void> {
+    const settled = new Promise<void>((resolve) => this.settleWaiters.push(resolve));
+    this.flush();
+    return settled;
+  }
+
+  /**
+   * T3 Zip: drops the unsaved draft and every later edit, for a file that is being deleted.
+   * Resolves once a write already sent has finished, so it cannot land after the delete.
+   */
+  discard(): Promise<void> {
+    this.discarded = true;
+    this.clearTimer();
+    this.options.onPendingChange(false);
+    return this.flushAndSettle();
   }
 
   dispose(): void {
@@ -66,7 +89,11 @@ export class FileSaveCoordinator<A = unknown, E = unknown> {
 
   private async persistLatest(): Promise<void> {
     if (this.saving) return;
-    if (this.latestRevision === this.confirmedRevision || this.options.canPersist?.() === false) {
+    if (
+      this.discarded ||
+      this.latestRevision === this.confirmedRevision ||
+      this.options.canPersist?.() === false
+    ) {
       this.settle();
       return;
     }
@@ -103,5 +130,8 @@ export class FileSaveCoordinator<A = unknown, E = unknown> {
   private settle(): void {
     this.flushing = false;
     this.options.onSettled?.();
+    const waiters = this.settleWaiters;
+    this.settleWaiters = [];
+    for (const resolve of waiters) resolve();
   }
 }

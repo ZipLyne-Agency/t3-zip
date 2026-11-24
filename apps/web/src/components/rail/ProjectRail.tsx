@@ -9,6 +9,11 @@ import {
   type DragMoveEvent,
 } from "@dnd-kit/core";
 import { scopeProjectRef, scopeThreadRef } from "@t3tools/client-runtime/environment";
+import {
+  railProjectAway,
+  railProjectKeysForMembers,
+  type RailProjectAway,
+} from "@t3tools/client-runtime/state/project-rail";
 import type { ScopedThreadRef } from "@t3tools/contracts";
 import { useRouter } from "@tanstack/react-router";
 import { msg, T, useGT } from "gt-react";
@@ -34,14 +39,13 @@ import { buildThreadRouteParams } from "../../threadRoutes";
 import { SidebarChromeFooter, SidebarChromeHeader } from "../sidebar/SidebarChrome";
 import { SidebarFolderDrop } from "../sidebar/SidebarFolderDrop";
 import { useProjectGroupUpdate } from "../../hooks/useProjectGroupUpdate";
-import { SidebarThreadHeader } from "../sidebar/SidebarThreadHeader";
+import { SidebarHeaderIconButton, SidebarThreadHeader } from "../sidebar/SidebarThreadHeader";
 import { Button } from "../ui/button";
 import { Menu, MenuItem, MenuPopup, MenuTrigger } from "../ui/menu";
 import { SidebarContent, SidebarGroup, useSidebar } from "../ui/sidebar";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 import { isIndefiniteSnooze } from "../indefiniteSnooze";
 import { useClientSettings } from "../../hooks/useSettings";
-import { groupMemberKeys } from "../tabs/threadTabs.logic";
 import { useProjectSnoozeClock } from "./useProjectSnooze";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { RailCollapsed } from "./RailCollapsed";
@@ -84,7 +88,7 @@ import {
   pickRailProjectThread,
   summarizeRailCounts,
 } from "./railStatus.logic";
-import { useProjectRailStore } from "./railStore";
+import { bringBackRailProject, RAIL_QUEUE_FILTERS, useProjectRailStore } from "./railStore";
 import { railThreadKey, useRailModel, type RailProject } from "./useRailModel";
 import { useOpenTab, useThreadTabsSource } from "../tabs/useThreadTabs";
 import { firstColumnThread } from "./ThreadColumn";
@@ -203,7 +207,7 @@ export function ProjectRail() {
   const lastThreadByProject = useProjectRailStore((store) => store.lastThreadByProject);
   const hiddenProjects = useProjectRailStore((store) => store.hiddenProjects);
   const snoozedProjects = useProjectRailStore((store) => store.snoozedProjects);
-  const { active: snoozedKeys, woken: wokenProjects } = useProjectSnoozeClock();
+  const { active: snoozedKeys, woken: wokenProjects, nowMs: snoozeNowMs } = useProjectSnoozeClock();
   // One string, so the effect below runs when the set of woken projects changes.
   const wokenKey = wokenProjects.join("\n");
   const timestampFormat = useClientSettings((settings) => settings.timestampFormat);
@@ -301,18 +305,11 @@ export function ProjectRail() {
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- applies a send from the composer, which cannot see project groups, to the rail's hidden and snoozed lists
   useEffect(() => {
     if (sentInProjects.length === 0) return;
-    const store = useProjectRailStore.getState();
-    const sent = new Set(sentInProjects);
-    for (const [projectKey, project] of projects) {
-      const hidden = store.hiddenProjects.includes(projectKey);
-      const snoozed = projectKey in store.snoozedProjects;
-      if (!hidden && !snoozed) continue;
-      if (![...groupMemberKeys(project.group)].some((key) => sent.has(key))) continue;
-      if (hidden) store.showProject(projectKey);
-      if (snoozed) store.wakeProjects([projectKey]);
-      store.revealProject(projectKey);
+    const groups = [...projects.values()].map((project) => project.group);
+    for (const projectKey of railProjectKeysForMembers(groups, sentInProjects)) {
+      bringBackRailProject(projectKey);
     }
-    store.clearSentInProjects();
+    useProjectRailStore.getState().clearSentInProjects();
   }, [projects, sentInProjects]);
 
   const change = (update: (layout: RailLayoutState) => RailLayoutState) =>
@@ -325,13 +322,6 @@ export function ProjectRail() {
       params: buildThreadRouteParams(threadRef),
     });
   };
-  const search = useRailThreadSearch({
-    searchableThreads: model.searchableThreads,
-    settledThreadKeys: model.settledThreadKeys,
-    routeThreadKey,
-    navigateToThread,
-  });
-
   const startThreadIn = (project: RailProject) => {
     if (isMobile) setOpenMobile(false);
     void handleNewThread(scopeProjectRef(project.group.environmentId, project.group.id));
@@ -535,6 +525,43 @@ export function ProjectRail() {
     suppressClick: () => suppressClickRef.current,
   };
 
+  // Opening a search result brings its project into view: back from Hidden or Snoozed, where it
+  // was, with its folder open. A project already in view is left as it is.
+  const bringIntoRail = (projectKey: string) => {
+    bringBackRailProject(projectKey);
+    useProjectRailStore.getState().revealProject(projectKey);
+  };
+  const search = useRailThreadSearch({
+    searchableThreads: model.searchableThreads,
+    settledThreadKeys: model.settledThreadKeys,
+    routeThreadKey,
+    navigateToThread,
+    projects: railProjectOrder(buildRailEntries(layout, projectKeys)).flatMap(
+      (projectKey) => projects.get(projectKey) ?? [],
+    ),
+    favoriteProjectKeys: favoriteProjects,
+    selectedProjectKey: highlightKey,
+    projectAway: (projectKey) =>
+      railProjectAway({ hiddenProjects, snoozedProjects }, projectKey, snoozeNowMs),
+    awayLabel: (away: RailProjectAway) =>
+      away.kind === "hidden"
+        ? gt("Hidden", { $context: "a project left out of the sidebar" })
+        : isIndefiniteSnooze(away.until)
+          ? gt("Snoozed until you wake it")
+          : gt("Snoozed until {time}", { time: untilLabel(away.until, timestampFormat) }),
+    openProject: (projectKey) => {
+      bringIntoRail(projectKey);
+      actions.openProject(projectKey);
+    },
+    onOpenThread: (thread) => {
+      const groups = [...projects.values()].map((project) => project.group);
+      const memberKey = `${thread.environmentId}:${thread.projectId}`;
+      for (const projectKey of railProjectKeysForMembers(groups, [memberKey])) {
+        bringIntoRail(projectKey);
+      }
+    },
+  });
+
   const newThreadFromHeader = () => {
     const project =
       (highlightKey === null ? undefined : projects.get(highlightKey)) ??
@@ -721,8 +748,15 @@ export function ProjectRail() {
             <SidebarGroup className="z-[1]">
               <SidebarThreadHeader
                 hasProjects={projectKeys.length > 0}
-                projectScope={null}
-                onNewProject={() => openCommandPalette({ open: "add-project" })}
+                projectScope={
+                  // The rail lists every project itself, so its header only adds one.
+                  <SidebarHeaderIconButton
+                    label={gt("Add project")}
+                    onClick={() => openCommandPalette({ open: "add-project" })}
+                  >
+                    <FolderPlusIcon />
+                  </SidebarHeaderIconButton>
+                }
                 onNewThread={newThreadFromHeader}
                 newThreadDisabled={projectKeys.length === 0 && !showNoProject}
                 newThreadShortcutLabel={newThreadShortcutLabel}
@@ -736,6 +770,7 @@ export function ProjectRail() {
                 searchResultCount={search.resultCount}
                 activeSearchResultIndex={search.activeIndex}
                 onClearSearch={search.clear}
+                searchLabel={gt("Search projects and threads")}
               />
             </SidebarGroup>
             {/* No Project, All Projects and the Projects header stay put; the list scrolls below. */}
@@ -753,6 +788,7 @@ export function ProjectRail() {
                 </div>
               ) : (
                 <RailFilterBar
+                  filters={RAIL_QUEUE_FILTERS}
                   filter={filter}
                   onChange={setFilter}
                   counts={{

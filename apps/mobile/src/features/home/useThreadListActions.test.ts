@@ -36,6 +36,7 @@ const state = vi.hoisted(() => ({
   }[],
   afterRequest: undefined as (() => void) | undefined,
   heldActions: new Map<string, Promise<void>>(),
+  confirmSettle: vi.fn(async (_targets: ReadonlyArray<{ threadId: string }>) => true),
 }));
 
 vi.mock("react", () => ({
@@ -56,6 +57,9 @@ vi.mock("../../components/ui/Dialog", () => ({
   alert: (title: string, _message: string, buttons?: { text: string; onPress?: () => void }[]) =>
     state.alerts.push({ title, buttons }),
   confirm: (dialog: { onConfirm: () => void }) => state.dialogs.push(dialog),
+}));
+vi.mock("./settleAutomationGate", () => ({
+  confirmSettleWithAutomations: state.confirmSettle,
 }));
 vi.mock("../archive/useArchivedThreadSnapshots", () => ({
   refreshArchivedThreadsForEnvironment: (environmentId: string) => {
@@ -229,6 +233,7 @@ beforeEach(() => {
   state.alerts = [];
   state.afterRequest = undefined;
   state.heldActions = new Map();
+  state.confirmSettle.mockReset().mockResolvedValue(true);
 });
 
 afterEach(() => {
@@ -468,15 +473,41 @@ describe("thread action undo", () => {
     const settleResponse = Promise.withResolvers<void>();
     state.heldActions.set("settle", settleResponse.promise);
 
-    const pending = [
-      actions.settleThread(thread),
-      actions.unsettleThread(thread),
-      actions.settleThread(thread),
-    ];
+    // Each tap is its own event, so the settle warning check finishes before the next tap.
+    const afterWarningCheck = () => state.confirmSettle.mock.results.at(-1)?.value;
+    const pending = [actions.settleThread(thread)];
+    await afterWarningCheck();
+    pending.push(actions.unsettleThread(thread));
+    pending.push(actions.settleThread(thread));
+    await afterWarningCheck();
     settleResponse.resolve();
 
     expect(await Promise.all(pending)).toEqual([true, true, true]);
     expect(state.requests.map(({ action }) => action)).toEqual(["settle", "unsettle", "settle"]);
+  });
+
+  it("settles nothing when the automation warning is cancelled", async () => {
+    const thread = makeThread();
+    state.confirmSettle.mockResolvedValue(false);
+    expect(await useThreadListActions().settleThread(thread)).toBe(false);
+    expect(state.confirmSettle).toHaveBeenCalledWith([
+      { environmentId: thread.environmentId, threadId: thread.id },
+    ]);
+    expect(state.requests).toEqual([]);
+  });
+
+  it("asks once when a thread is moved to Settled", async () => {
+    const thread = makeThread();
+    state.shells = [thread];
+    expect(
+      await useThreadListActions().moveThread(thread, {
+        targetId: null,
+        section: "settled",
+        placement: "after",
+      }),
+    ).toBe(true);
+    expect(state.confirmSettle).toHaveBeenCalledOnce();
+    expect(state.requests.map(({ action }) => action)).toEqual(["settle"]);
   });
 
   it("restores pin placement and snooze after settling, only once", async () => {

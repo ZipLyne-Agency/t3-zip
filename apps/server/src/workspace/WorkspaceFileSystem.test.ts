@@ -962,4 +962,364 @@ it.layer(layerTest, { excludeTestServices: true })("WorkspaceFileSystemLive", (i
       }),
     );
   });
+
+  // T3 Zip: create-only files and folders for the Files panel.
+  describe("createEntry", () => {
+    it.effect("creates a file with its contents and lists it", () =>
+      Effect.gen(function* () {
+        const workspaceFileSystem = yield* WorkspaceFileSystem.WorkspaceFileSystem;
+        const workspaceEntries = yield* WorkspaceEntries.WorkspaceEntries;
+        const fileSystem = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const cwd = yield* makeTempDir;
+        yield* writeTextFile(cwd, "notes/existing.md", "old\n");
+        yield* workspaceEntries.list({ cwd });
+
+        const created = yield* workspaceFileSystem.createEntry({
+          cwd,
+          relativePath: "notes/2026-11-22-standup.md",
+          kind: "file",
+          contents: "# Standup\n",
+        });
+
+        expect(created.relativePath).toBe("notes/2026-11-22-standup.md");
+        expect(
+          yield* fileSystem.readFileString(path.join(cwd, "notes/2026-11-22-standup.md")),
+        ).toBe("# Standup\n");
+        const listed = yield* workspaceEntries.list({ cwd });
+        expect(listed.entries).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({ path: "notes/2026-11-22-standup.md" }),
+          ]),
+        );
+      }),
+    );
+
+    it.effect("refuses to create over an existing entry and leaves it unchanged", () =>
+      Effect.gen(function* () {
+        const workspaceFileSystem = yield* WorkspaceFileSystem.WorkspaceFileSystem;
+        const fileSystem = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const cwd = yield* makeTempDir;
+
+        yield* workspaceFileSystem.createEntry({
+          cwd,
+          relativePath: "Untitled.md",
+          kind: "file",
+          contents: "first\n",
+        });
+        const fileError = yield* workspaceFileSystem
+          .createEntry({ cwd, relativePath: "Untitled.md", kind: "file", contents: "second\n" })
+          .pipe(Effect.flip);
+        expect(fileError).toBeInstanceOf(WorkspaceFileSystem.WorkspaceEntryExistsError);
+        expect(fileError.message).toContain("already exists");
+        expect(yield* fileSystem.readFileString(path.join(cwd, "Untitled.md"))).toBe("first\n");
+
+        // A folder name taken by a file, and a file name taken by a folder.
+        const folderError = yield* workspaceFileSystem
+          .createEntry({ cwd, relativePath: "Untitled.md", kind: "directory" })
+          .pipe(Effect.flip);
+        expect(folderError).toBeInstanceOf(WorkspaceFileSystem.WorkspaceEntryExistsError);
+        yield* fileSystem.makeDirectory(path.join(cwd, "drafts"));
+        const overFolderError = yield* workspaceFileSystem
+          .createEntry({ cwd, relativePath: "drafts", kind: "file", contents: "x" })
+          .pipe(Effect.flip);
+        expect(overFolderError).toBeInstanceOf(WorkspaceFileSystem.WorkspaceEntryExistsError);
+        expect((yield* fileSystem.stat(path.join(cwd, "drafts"))).type).toBe("Directory");
+      }),
+    );
+
+    it.effect("rejects paths that escape the workspace", () =>
+      Effect.gen(function* () {
+        const workspaceFileSystem = yield* WorkspaceFileSystem.WorkspaceFileSystem;
+        const fileSystem = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const cwd = yield* makeTempDir;
+        const outsideDir = yield* makeTempDir;
+
+        for (const relativePath of [
+          "../escape.md",
+          " folder/../../escape.md",
+          path.join(outsideDir, "absolute.md"),
+        ]) {
+          for (const kind of ["file", "directory"] as const) {
+            const error = yield* workspaceFileSystem
+              .createEntry({ cwd, relativePath, kind, contents: "# nope\n" })
+              .pipe(Effect.flip);
+            expect(error).toBeInstanceOf(WorkspacePaths.WorkspacePathOutsideRootError);
+          }
+        }
+        expect(
+          yield* fileSystem
+            .stat(path.resolve(cwd, "..", "escape.md"))
+            .pipe(Effect.orElseSucceed(() => null)),
+        ).toBeNull();
+        expect(yield* fileSystem.readDirectory(outsideDir)).toEqual([]);
+
+        const unknownCwd = yield* fileSystem.makeTempDirectoryScoped({
+          prefix: UNKNOWN_WORKSPACE_PREFIX,
+        });
+        const unknownError = yield* workspaceFileSystem
+          .createEntry({ cwd: unknownCwd, relativePath: "plan.md", kind: "file" })
+          .pipe(Effect.flip);
+        expect(unknownError).toBeInstanceOf(KnownWorkspaces.UnknownWorkspaceError);
+      }),
+    );
+
+    it.effect.skipIf(!symlinksSupported)("rejects creation through an escaping symlink", () =>
+      Effect.gen(function* () {
+        const workspaceFileSystem = yield* WorkspaceFileSystem.WorkspaceFileSystem;
+        const fileSystem = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const cwd = yield* makeTempDir;
+        const outsideDir = yield* makeTempDir;
+        yield* fileSystem.symlink(outsideDir, path.join(cwd, "linked-dir"));
+
+        for (const kind of ["file", "directory"] as const) {
+          const error = yield* workspaceFileSystem
+            .createEntry({ cwd, relativePath: "linked-dir/new", kind })
+            .pipe(Effect.flip);
+          expect(error).toBeInstanceOf(WorkspaceFileSystem.WorkspaceFilePathEscapeError);
+        }
+        expect(yield* fileSystem.readDirectory(outsideDir)).toEqual([]);
+      }),
+    );
+
+    it.effect("creates an empty folder and lists it", () =>
+      Effect.gen(function* () {
+        const workspaceFileSystem = yield* WorkspaceFileSystem.WorkspaceFileSystem;
+        const workspaceEntries = yield* WorkspaceEntries.WorkspaceEntries;
+        const fileSystem = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const cwd = yield* makeTempDir;
+
+        const created = yield* workspaceFileSystem.createEntry({
+          cwd,
+          relativePath: "meetings",
+          kind: "directory",
+        });
+
+        expect(created.relativePath).toBe("meetings");
+        expect((yield* fileSystem.stat(path.join(cwd, "meetings"))).type).toBe("Directory");
+        expect(yield* fileSystem.readDirectory(path.join(cwd, "meetings"))).toEqual([]);
+        const listed = yield* workspaceEntries.list({ cwd, directoryPath: "" });
+        expect(listed.entries).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({ path: "meetings", kind: "directory" }),
+          ]),
+        );
+        const again = yield* workspaceFileSystem
+          .createEntry({ cwd, relativePath: "meetings", kind: "directory" })
+          .pipe(Effect.flip);
+        expect(again).toBeInstanceOf(WorkspaceFileSystem.WorkspaceEntryExistsError);
+      }),
+    );
+  });
+
+  describe("renameEntry", () => {
+    it.effect("renames a file and a folder, keeping contents", () =>
+      Effect.gen(function* () {
+        const workspaceFileSystem = yield* WorkspaceFileSystem.WorkspaceFileSystem;
+        const fileSystem = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const cwd = yield* makeTempDir;
+        yield* writeTextFile(cwd, "notes/Untitled.md", "# Plan\n");
+
+        const renamed = yield* workspaceFileSystem.renameEntry({
+          cwd,
+          relativePath: "notes/Untitled.md",
+          newRelativePath: "notes/plan.md",
+        });
+        expect(renamed.relativePath).toBe("notes/plan.md");
+        expect(yield* fileSystem.readFileString(path.join(cwd, "notes/plan.md"))).toBe("# Plan\n");
+        expect(yield* fileSystem.exists(path.join(cwd, "notes/Untitled.md"))).toBe(false);
+
+        yield* workspaceFileSystem.renameEntry({
+          cwd,
+          relativePath: "notes",
+          newRelativePath: "meetings",
+        });
+        expect(yield* fileSystem.readFileString(path.join(cwd, "meetings/plan.md"))).toBe(
+          "# Plan\n",
+        );
+        expect(yield* fileSystem.exists(path.join(cwd, "notes"))).toBe(false);
+
+        // Changing only the case works on case-insensitive volumes too.
+        yield* workspaceFileSystem.renameEntry({
+          cwd,
+          relativePath: "meetings/plan.md",
+          newRelativePath: "meetings/Plan.md",
+        });
+        expect(yield* fileSystem.readDirectory(path.join(cwd, "meetings"))).toEqual(["Plan.md"]);
+      }),
+    );
+
+    it.effect("refuses a taken name and leaves both entries unchanged", () =>
+      Effect.gen(function* () {
+        const workspaceFileSystem = yield* WorkspaceFileSystem.WorkspaceFileSystem;
+        const fileSystem = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const cwd = yield* makeTempDir;
+        yield* writeTextFile(cwd, "a.md", "a\n");
+        yield* writeTextFile(cwd, "b.md", "b\n");
+        yield* writeTextFile(cwd, "drafts/keep.md", "keep\n");
+        yield* fileSystem.makeDirectory(path.join(cwd, "empty"));
+
+        for (const [relativePath, newRelativePath] of [
+          ["a.md", "b.md"],
+          ["a.md", "drafts"],
+          ["drafts", "b.md"],
+          ["drafts", "empty"],
+        ] as const) {
+          const error = yield* workspaceFileSystem
+            .renameEntry({ cwd, relativePath, newRelativePath })
+            .pipe(Effect.flip);
+          expect(error).toBeInstanceOf(WorkspaceFileSystem.WorkspaceEntryExistsError);
+        }
+        expect(yield* fileSystem.readFileString(path.join(cwd, "a.md"))).toBe("a\n");
+        expect(yield* fileSystem.readFileString(path.join(cwd, "b.md"))).toBe("b\n");
+        expect(yield* fileSystem.readFileString(path.join(cwd, "drafts/keep.md"))).toBe("keep\n");
+        expect(yield* fileSystem.readDirectory(path.join(cwd, "empty"))).toEqual([]);
+      }),
+    );
+
+    it.effect("refuses paths outside the workspace, the root and .git", () =>
+      Effect.gen(function* () {
+        const workspaceFileSystem = yield* WorkspaceFileSystem.WorkspaceFileSystem;
+        const fileSystem = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const cwd = yield* makeTempDir;
+        const outsideDir = yield* makeTempDir;
+        yield* writeTextFile(cwd, "a.md", "a\n");
+        yield* writeTextFile(cwd, ".git/HEAD", "ref: refs/heads/main\n");
+
+        for (const newRelativePath of ["../escape.md", path.join(outsideDir, "abs.md")]) {
+          const error = yield* workspaceFileSystem
+            .renameEntry({ cwd, relativePath: "a.md", newRelativePath })
+            .pipe(Effect.flip);
+          expect(error).toBeInstanceOf(WorkspacePaths.WorkspacePathOutsideRootError);
+        }
+        const fromOutside = yield* workspaceFileSystem
+          .renameEntry({ cwd, relativePath: "../a.md", newRelativePath: "b.md" })
+          .pipe(Effect.flip);
+        expect(fromOutside).toBeInstanceOf(WorkspacePaths.WorkspacePathOutsideRootError);
+        const root = yield* workspaceFileSystem
+          .renameEntry({ cwd, relativePath: ".", newRelativePath: "renamed" })
+          .pipe(Effect.flip);
+        expect(root).toBeInstanceOf(WorkspacePaths.WorkspacePathOutsideRootError);
+        const intoGit = yield* workspaceFileSystem
+          .renameEntry({ cwd, relativePath: "a.md", newRelativePath: ".git/a.md" })
+          .pipe(Effect.flip);
+        expect(intoGit).toBeInstanceOf(WorkspaceFileSystem.WorkspaceFilePathEscapeError);
+        const git = yield* workspaceFileSystem
+          .renameEntry({ cwd, relativePath: ".git", newRelativePath: "git-backup" })
+          .pipe(Effect.flip);
+        expect(git).toBeInstanceOf(WorkspaceFileSystem.WorkspaceFilePathEscapeError);
+
+        expect(yield* fileSystem.readFileString(path.join(cwd, "a.md"))).toBe("a\n");
+        expect(yield* fileSystem.exists(path.join(cwd, ".git/HEAD"))).toBe(true);
+        expect(yield* fileSystem.readDirectory(outsideDir)).toEqual([]);
+      }),
+    );
+  });
+
+  describe("deleteEntry", () => {
+    it.effect("permanently deletes a file and a folder with its contents", () =>
+      Effect.gen(function* () {
+        const workspaceFileSystem = yield* WorkspaceFileSystem.WorkspaceFileSystem;
+        const workspaceEntries = yield* WorkspaceEntries.WorkspaceEntries;
+        const fileSystem = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const cwd = yield* makeTempDir;
+        yield* writeTextFile(cwd, "notes.md", "n\n");
+        yield* writeTextFile(cwd, "drafts/one.md", "1\n");
+        yield* writeTextFile(cwd, "drafts/deep/two.md", "2\n");
+        yield* workspaceEntries.list({ cwd });
+
+        const deleted = yield* workspaceFileSystem.deleteEntry({
+          cwd,
+          relativePath: "notes.md",
+          mode: "permanent",
+        });
+        expect(deleted.relativePath).toBe("notes.md");
+        expect(yield* fileSystem.exists(path.join(cwd, "notes.md"))).toBe(false);
+
+        yield* workspaceFileSystem.deleteEntry({ cwd, relativePath: "drafts", mode: "permanent" });
+        expect(yield* fileSystem.exists(path.join(cwd, "drafts"))).toBe(false);
+        const listed = yield* workspaceEntries.list({ cwd });
+        expect(listed.entries.map((entry) => entry.path)).not.toContain("notes.md");
+      }),
+    );
+
+    it.effect("refuses the root, .git and paths outside the workspace", () =>
+      Effect.gen(function* () {
+        const workspaceFileSystem = yield* WorkspaceFileSystem.WorkspaceFileSystem;
+        const fileSystem = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const cwd = yield* makeTempDir;
+        const outsideDir = yield* makeTempDir;
+        yield* writeTextFile(cwd, "keep.md", "k\n");
+        yield* writeTextFile(cwd, ".git/HEAD", "ref: refs/heads/main\n");
+        yield* writeTextFile(outsideDir, "outside.md", "o\n");
+
+        for (const relativePath of [".", "./", "folder/.."]) {
+          const error = yield* workspaceFileSystem
+            .deleteEntry({ cwd, relativePath, mode: "permanent" })
+            .pipe(Effect.flip);
+          expect(error).toBeInstanceOf(WorkspacePaths.WorkspacePathOutsideRootError);
+        }
+        for (const relativePath of [".git", ".git/HEAD"]) {
+          const error = yield* workspaceFileSystem
+            .deleteEntry({ cwd, relativePath, mode: "permanent" })
+            .pipe(Effect.flip);
+          expect(error).toBeInstanceOf(WorkspaceFileSystem.WorkspaceFilePathEscapeError);
+        }
+        for (const relativePath of [
+          `../${path.basename(outsideDir)}/outside.md`,
+          path.join(outsideDir, "outside.md"),
+        ]) {
+          const error = yield* workspaceFileSystem
+            .deleteEntry({ cwd, relativePath, mode: "permanent" })
+            .pipe(Effect.flip);
+          expect(error).toBeInstanceOf(WorkspacePaths.WorkspacePathOutsideRootError);
+        }
+
+        expect(yield* fileSystem.exists(path.join(cwd, "keep.md"))).toBe(true);
+        expect(yield* fileSystem.exists(path.join(cwd, ".git/HEAD"))).toBe(true);
+        expect(yield* fileSystem.exists(path.join(outsideDir, "outside.md"))).toBe(true);
+      }),
+    );
+
+    it.effect.skipIf(!symlinksSupported)("deletes a symlink, never what it points to", () =>
+      Effect.gen(function* () {
+        const workspaceFileSystem = yield* WorkspaceFileSystem.WorkspaceFileSystem;
+        const fileSystem = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const cwd = yield* makeTempDir;
+        yield* writeTextFile(cwd, "real/inside.md", "i\n");
+        yield* fileSystem.symlink(path.join(cwd, "real"), path.join(cwd, "link"));
+
+        yield* workspaceFileSystem.deleteEntry({ cwd, relativePath: "link", mode: "permanent" });
+        expect(yield* fileSystem.exists(path.join(cwd, "link"))).toBe(false);
+        expect(yield* fileSystem.readFileString(path.join(cwd, "real/inside.md"))).toBe("i\n");
+      }),
+    );
+
+    it.effect("fails instead of deleting permanently when the Trash is unavailable", () =>
+      Effect.gen(function* () {
+        const workspaceFileSystem = yield* WorkspaceFileSystem.WorkspaceFileSystem;
+        const fileSystem = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const cwd = yield* makeTempDir;
+        yield* writeTextFile(cwd, "notes.md", "n\n");
+
+        const error = yield* workspaceFileSystem
+          .deleteEntry({ cwd, relativePath: "notes.md", mode: "trash" })
+          .pipe(Effect.provideService(HostProcess.Platform, "linux"), Effect.flip);
+        expect(error).toBeInstanceOf(WorkspaceFileSystem.WorkspaceEntryChangeError);
+        expect(error).toMatchObject({ trashUnavailable: true });
+        expect(yield* fileSystem.exists(path.join(cwd, "notes.md"))).toBe(true);
+      }),
+    );
+  });
 });

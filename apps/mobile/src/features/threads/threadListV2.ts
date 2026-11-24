@@ -13,7 +13,10 @@ import {
   hasUnseenRunFailure,
   type SnoozePreset,
 } from "@t3tools/client-runtime/state/thread-settled";
-import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
+import type {
+  EnvironmentProject,
+  EnvironmentThreadShell,
+} from "@t3tools/client-runtime/state/shell";
 import { resolveThreadProviderStack } from "@t3tools/client-runtime/state/models";
 import {
   threadSearchMatchKey,
@@ -516,8 +519,22 @@ export interface ThreadListV2StatusSectionListItem {
   readonly clearAllCount: number;
 }
 
+/**
+ * A project's name over its threads inside a Done heading, when every project is listed.
+ * No project means the thread's project is not known on this device.
+ */
+export interface ThreadListV2StatusProjectListItem {
+  readonly type: "v2-status-project";
+  readonly key: string;
+  readonly title: string | null;
+  readonly project: EnvironmentProject | null;
+  readonly scratch: boolean;
+  readonly count: number;
+}
+
 export type ThreadListV2ListItem =
   | ThreadListV2StatusSectionListItem
+  | ThreadListV2StatusProjectListItem
   | ThreadListV2ThreadListItem
   | ThreadListV2PendingListItem
   | ThreadListV2WorkingShelfListItem
@@ -533,7 +550,8 @@ export function isThreadListV2ListItem(value: {
     value.type === "v2-working-shelf" ||
     value.type === "v2-snoozed-shelf" ||
     value.type === "v2-settled-shelf" ||
-    value.type === "v2-status-section"
+    value.type === "v2-status-section" ||
+    value.type === "v2-status-project"
   );
 }
 
@@ -596,6 +614,15 @@ export function threadListV2ListItemsAreEqual(
         previous.key === item.key &&
         previous.count === item.count &&
         previous.clearAllCount === item.clearAllCount
+      );
+    case "v2-status-project":
+      return (
+        previous.type === "v2-status-project" &&
+        previous.key === item.key &&
+        previous.title === item.title &&
+        previous.project === item.project &&
+        previous.scratch === item.scratch &&
+        previous.count === item.count
       );
   }
 }
@@ -759,6 +786,23 @@ function sortSettledThreadsReusingLast(
   return lastSettledOutput;
 }
 
+/**
+ * Threads whose titles match a folded query, best first: the command palette's matches,
+ * typo fallback included. Rank one list at once, since an exact match turns typos off.
+ */
+export function rankThreadTitleMatches(
+  threads: ReadonlyArray<EnvironmentThreadShell>,
+  foldedQuery: string,
+  nowMs: number,
+): EnvironmentThreadShell[] {
+  return rankSearchItems(threads, (thread, options) =>
+    scoreThreadSearch(foldedQuery, threadSearchSubject(thread, null), nowMs, {
+      ...options,
+      picks: false,
+    }),
+  ).map(({ item }) => item);
+}
+
 export function buildThreadListV2Items(input: {
   readonly pendingOrder?: PendingThreadOrder | null;
   readonly threads: ReadonlyArray<EnvironmentThreadShell>;
@@ -819,17 +863,9 @@ export function buildThreadListV2Items(input: {
       (input.environmentId === null || thread.environmentId === input.environmentId) &&
       (projectKeys === null || projectKeys.has(`${thread.environmentId}:${thread.projectId}`)),
   );
-  // The same matches as the command palette, typo fallback included. Only
-  // listed threads are ranked: a hidden exact match must not turn typos off.
+  // Only listed threads are ranked: a hidden exact match must not turn typos off.
   const rankedMatches =
-    query.length > 0
-      ? rankSearchItems(listedThreads, (thread, options) =>
-          scoreThreadSearch(query, threadSearchSubject(thread, null), nowMs, {
-            ...options,
-            picks: false,
-          }),
-        ).map(({ item }) => item)
-      : null;
+    query.length > 0 ? rankThreadTitleMatches(listedThreads, query, nowMs) : null;
   const matchingThreads = rankedMatches === null ? null : new Set(rankedMatches);
   // Threads listed only because their messages match; only their rows show
   // the message and open at it.

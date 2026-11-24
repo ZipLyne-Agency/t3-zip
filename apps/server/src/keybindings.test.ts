@@ -15,6 +15,21 @@ import * as Keybindings from "./keybindings.ts";
 import * as SharedKeybindings from "@t3tools/shared/keybindings";
 import { KeybindingsConfigError, MAX_KEYBINDINGS_COUNT } from "@t3tools/contracts";
 
+/**
+ * How many custom rules leave `rule`, a default, as the oldest binding still within the limit.
+ * Derived from the defaults so adding a default elsewhere in the list does not move the edge.
+ */
+const fillersLeavingDefaultFirstVisible = (rule: KeybindingRule): number => {
+  const index = SharedKeybindings.DEFAULT_KEYBINDINGS.findIndex(
+    (candidate) =>
+      candidate.key === rule.key &&
+      candidate.command === rule.command &&
+      candidate.when === rule.when,
+  );
+  if (index < 0) throw new Error(`${rule.command} ${rule.key} is not a default binding`);
+  return MAX_KEYBINDINGS_COUNT - (SharedKeybindings.DEFAULT_KEYBINDINGS.length - index);
+};
+
 const KeybindingsConfigJson = Schema.fromJsonString(KeybindingsConfig);
 const encodeKeybindingsConfigJson = Schema.encodeEffect(KeybindingsConfigJson);
 const decodeKeybindingsConfigJson = Schema.decodeUnknownEffect(KeybindingsConfigJson);
@@ -182,6 +197,8 @@ it.layer(NodeServices.layer)("keybindings", (it) => {
           { key: "mod+j", command: "terminal.toggle" },
           { key: "mod+shift+d+o", command: "terminal.new" },
           { key: "mod+x", command: "invalid.command" },
+          { key: "mod+", command: "sidebar.toggle" },
+          { key: "mod+a+++", command: "sidebar.toggle" },
         ]),
       );
 
@@ -204,6 +221,16 @@ it.layer(NodeServices.layer)("keybindings", (it) => {
           kind: "keybindings.invalid-entry",
           index: 2,
           message: configState.issues[1]?.message ?? "",
+        },
+        {
+          kind: "keybindings.invalid-entry",
+          index: 3,
+          message: configState.issues[2]?.message ?? "",
+        },
+        {
+          kind: "keybindings.invalid-entry",
+          index: 4,
+          message: configState.issues[3]?.message ?? "",
         },
       ]);
     }).pipe(Effect.provide(layerKeybindings())),
@@ -523,10 +550,19 @@ it.layer(NodeServices.layer)("keybindings", (it) => {
       const keybindings = yield* Keybindings.Keybindings;
       yield* writeKeybindingsConfig(
         keybindingsConfigPath,
-        Array.from({ length: 210 }, (_, index) => ({
-          key: "mod+alt+f1",
-          command: `script.filler-${index}.run` as const,
-        })),
+        Array.from(
+          {
+            length: fillersLeavingDefaultFirstVisible({
+              key: "mod+shift+o",
+              command: "chat.new",
+              when: "!terminalFocus",
+            }),
+          },
+          (_, index) => ({
+            key: "mod+alt+f1",
+            command: `script.filler-${index}.run` as const,
+          }),
+        ),
       );
 
       const target = { key: "mod+shift+o", command: "chat.new", when: "!terminalFocus" } as const;
@@ -556,10 +592,19 @@ it.layer(NodeServices.layer)("keybindings", (it) => {
         const keybindings = yield* Keybindings.Keybindings;
         yield* writeKeybindingsConfig(
           keybindingsConfigPath,
-          Array.from({ length: 209 }, (_, index) => ({
-            key: "mod+alt+f1",
-            command: `script.filler-${index}.run` as const,
-          })),
+          Array.from(
+            {
+              length: fillersLeavingDefaultFirstVisible({
+                key: "mod+n",
+                command: "chat.new",
+                when: "!terminalFocus",
+              }),
+            },
+            (_, index) => ({
+              key: "mod+alt+f1",
+              command: `script.filler-${index}.run` as const,
+            }),
+          ),
         );
 
         const target = { key: "mod+n", command: "chat.new", when: "!terminalFocus" } as const;

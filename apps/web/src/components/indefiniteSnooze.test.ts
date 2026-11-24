@@ -61,6 +61,7 @@ describe("thread menu", () => {
     canSnoozeNow: true,
     isRegeneratingTitle: false,
     isRunning: false,
+    hasCompletedRun: true,
     supports: {
       settlement: true,
       autoSettleOptOut: true,

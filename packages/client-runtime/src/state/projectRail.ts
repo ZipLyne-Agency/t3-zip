@@ -11,6 +11,7 @@ import type { SnoozedProjects } from "./projectRailSnooze.ts";
 
 export * from "./projectRailLayout.ts";
 export * from "./projectRailSnooze.ts";
+export * from "./projectRailSearch.ts";
 
 /** The rail as the server keeps it, in `ServerSettings.projectRail`. */
 export type SharedProjectRail = ProjectRailSettings;

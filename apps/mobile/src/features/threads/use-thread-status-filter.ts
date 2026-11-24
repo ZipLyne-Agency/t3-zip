@@ -1,4 +1,5 @@
 import { useAtomValue } from "@effect/atom-react";
+import { normalizeThreadStatusFilter } from "@t3tools/client-runtime/state/thread-status-filter";
 import * as ThreadUndo from "@t3tools/client-runtime/state/thread-undo";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
 import { AsyncResult } from "effect/reactivity";
@@ -22,7 +23,8 @@ export interface ClearFromDoneTarget {
 
 /**
  * The thread list's status filter and Done's clear marks, both kept on this device. The first
- * load starts keeping finished threads from now, so older ones never flood Opened.
+ * load starts keeping finished threads from now, so older ones never flood Opened. The saved
+ * filter is read onto a tab the list shows: every scope combines Working and Done.
  */
 export function useThreadStatusFilter() {
   const preferencesResult = useAtomValue(mobilePreferencesAtom);
@@ -30,9 +32,10 @@ export function useThreadStatusFilter() {
   const visitThread = useAtomCommand(threadEnvironment.visit, { reportFailure: false });
   const markThreadUnread = useAtomCommand(threadEnvironment.markUnread, { reportFailure: false });
   const loaded = AsyncResult.isSuccess(preferencesResult);
-  const statusFilter: ThreadListStatusFilter = loaded
-    ? (preferencesResult.value.threadListStatusFilter ?? "all")
-    : "all";
+  const statusFilter: ThreadListStatusFilter = normalizeThreadStatusFilter(
+    loaded ? (preferencesResult.value.threadListStatusFilter ?? "all") : "all",
+    true,
+  );
   const clears = loaded ? (preferencesResult.value.threadDoneClears ?? null) : null;
   const needsReviewStart = loaded && clears === null;
 

@@ -27,13 +27,27 @@ import {
   type SharedProjectRail,
 } from "./project-drawer";
 
-/** Connected environments and the rail their settings hold, in the catalog's order. */
+/**
+ * Environments with settings, connected or remembered from the last connection, and the rail
+ * those settings hold, in the catalog's order. Reading the remembered rail keeps folders in
+ * place while the phone reconnects; writes wait for a live connection.
+ */
 function railsFromPresentations(
   presentations: ReadonlyMap<EnvironmentId, EnvironmentPresentation>,
-): Array<{ readonly environmentId: EnvironmentId; readonly rail: SharedProjectRail | undefined }> {
+): Array<{
+  readonly environmentId: EnvironmentId;
+  readonly rail: SharedProjectRail | undefined;
+  readonly connected: boolean;
+}> {
   return [...presentations].flatMap(([environmentId, presentation]) =>
-    presentation.connection.phase === "connected" && presentation.serverConfig
-      ? [{ environmentId, rail: presentation.serverConfig.settings.projectRail }]
+    presentation.serverConfig
+      ? [
+          {
+            environmentId,
+            rail: presentation.serverConfig.settings.projectRail,
+            connected: presentation.connection.phase === "connected",
+          },
+        ]
       : [],
   );
 }
@@ -56,11 +70,22 @@ function setPending(environmentId: EnvironmentId, pending: PendingRail | null) {
 function primaryRail(
   presentations: ReadonlyMap<EnvironmentId, EnvironmentPresentation>,
   pending: ReadonlyMap<EnvironmentId, PendingRail>,
-): (EnvironmentProjectRail<EnvironmentId> & { readonly server: SharedProjectRail }) | null {
-  const primary = primaryProjectRail(railsFromPresentations(presentations));
+):
+  | (EnvironmentProjectRail<EnvironmentId> & {
+      readonly server: SharedProjectRail;
+      readonly connected: boolean;
+    })
+  | null {
+  const rails = railsFromPresentations(presentations);
+  const primary = primaryProjectRail(rails);
   if (primary === null) return null;
+  const connected = rails.some(
+    (entry) => entry.environmentId === primary.environmentId && entry.connected,
+  );
   const rail = effectiveProjectRail(primary.rail, pending.get(primary.environmentId) ?? null);
-  return rail ? { environmentId: primary.environmentId, rail, server: primary.rail } : null;
+  return rail
+    ? { environmentId: primary.environmentId, rail, server: primary.rail, connected }
+    : null;
 }
 
 // One write at a time, so each builds on the one before it.
@@ -97,7 +122,7 @@ export function useProjectDrawerRail(input: {
         appAtomRegistry.get(environmentPresentations.presentationsAtom),
         appAtomRegistry.get(pendingRailsAtom),
       );
-      if (latest === null || !writable.has(latest.environmentId)) return;
+      if (latest === null || !latest.connected || !writable.has(latest.environmentId)) return;
       const { environmentId } = latest;
       const next = editSharedProjectRail(latest.rail, change, {
         knownProjectKeys,
@@ -120,21 +145,26 @@ export function useProjectDrawerRail(input: {
   };
 
   const rail = primary?.rail ?? null;
-  const sent = useAtomValue(sentThreadMessagesAtom);
-  const bringBack = useEffectEvent((messages: ReadonlyArray<SentThreadMessage>) => {
-    clearSentThreadMessages(messages);
+  // Shows hidden projects and wakes snoozed ones with the shelves' own writes; without a
+  // shared rail there is nothing to write.
+  const bringBack = (projectKeys: ReadonlyArray<string>) => {
     if (rail === null) return;
-    const keys = messages.flatMap((message) => input.projectKeyOfSent(message) ?? []);
-    for (const change of projectsToBringBack(rail, keys)) apply(change);
+    for (const change of projectsToBringBack(rail, projectKeys)) apply(change);
+  };
+  const sent = useAtomValue(sentThreadMessagesAtom);
+  const bringBackSent = useEffectEvent((messages: ReadonlyArray<SentThreadMessage>) => {
+    clearSentThreadMessages(messages);
+    bringBack(messages.flatMap((message) => input.projectKeyOfSent(message) ?? []));
   });
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- a message sent from the composer, which cannot see project scopes, brings its hidden or snoozed project back, as on desktop
   useEffect(() => {
-    if (sent.length > 0) bringBack(sent);
+    if (sent.length > 0) bringBackSent(sent);
   }, [sent]);
 
   return {
     rail,
-    canEdit: primary !== null && writable.has(primary.environmentId),
+    canEdit: primary !== null && primary.connected && writable.has(primary.environmentId),
     apply,
+    bringBack,
   };
 }

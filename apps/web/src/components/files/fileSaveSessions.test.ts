@@ -258,4 +258,53 @@ describe("file save sessions", () => {
     await vi.runAllTimersAsync();
     expect(h.persist).not.toHaveBeenCalled();
   });
+
+  it("flushes drafts under a renamed folder before the rename", async () => {
+    using h = setup();
+    const inside = { ...target, relativePath: "notes/plan.md" };
+    const elsewhere = { ...target, relativePath: "notes-old/plan.md" };
+    h.sessions.acquire(inside, h.onPendingChange);
+    h.sessions.acquire(elsewhere, h.onPendingChange);
+    h.sessions.change(inside, "draft");
+    h.sessions.change(elsewhere, "other draft");
+
+    expect(await h.sessions.flushUnder({ ...target, relativePath: "notes" })).toBe(true);
+    expect(h.writes()).toEqual([[inside, "draft"]]);
+
+    h.state.writable = false;
+    h.sessions.change(inside, "unsaved");
+    expect(await h.sessions.flushUnder({ ...target, relativePath: "notes" })).toBe(false);
+  });
+
+  it("drops drafts of a deleted file so nothing writes it back", async () => {
+    using h = setup();
+    let resolveWrite: (
+      value: Awaited<ReturnType<FileSaveSessionDeps["persist"]>>,
+    ) => void = () => {};
+    h.persist.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveWrite = resolve;
+        }),
+    );
+    h.sessions.acquire(target, h.onPendingChange);
+    h.sessions.change(target, "sent");
+    await vi.advanceTimersByTimeAsync(500);
+    h.sessions.change(target, "queued");
+
+    let discarded = false;
+    const discarding = h.sessions.discardUnder(target).then((paths) => {
+      discarded = true;
+      return paths;
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    // The write already sent finishes first, so it cannot land after the delete.
+    expect(discarded).toBe(false);
+    resolveWrite(AsyncResult.success(undefined));
+    expect(await discarding).toEqual(["file.txt"]);
+    h.sessions.change(target, "after delete");
+    await vi.runAllTimersAsync();
+    expect(h.writes()).toEqual([[target, "sent"]]);
+    expect(h.onPendingChange).toHaveBeenLastCalledWith("file.txt", false);
+  });
 });

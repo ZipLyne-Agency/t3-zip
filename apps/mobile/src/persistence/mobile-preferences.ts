@@ -72,7 +72,13 @@ const ThreadListFilters = Schema.Struct({
 export type ThreadListFilters = typeof ThreadListFilters.Type;
 
 /** Which threads the list shows: every one, or those waiting on you, running, or finished. */
-export const ThreadListStatusFilter = Schema.Literals(["all", "waiting", "working", "done"]);
+export const ThreadListStatusFilter = Schema.Literals([
+  "all",
+  "waiting",
+  "working",
+  "done",
+  "workingDone",
+]);
 export type ThreadListStatusFilter = typeof ThreadListStatusFilter.Type;
 const isThreadListStatusFilter = Schema.is(ThreadListStatusFilter);
 
@@ -176,6 +182,8 @@ export interface Preferences {
   readonly collapsedProjectGroups?: readonly string[];
   /** Project drawer folders folded on this device; the folders themselves are shared. */
   readonly projectDrawerCollapsedFolders?: readonly string[];
+  /** The project drawer lists only favorites on this device, as the desktop rail's star does. */
+  readonly projectDrawerFavoritesOnly?: boolean;
   readonly dismissedDatabaseStorageNotices?: readonly string[];
   /** Hardware-keyboard Return behavior in the composer. */
   readonly composerEnterBehavior?: ComposerEnterBehavior;
@@ -271,6 +279,7 @@ function sanitizePreferences(parsed: Preferences): Preferences {
     connectOnboardingOptOutAccounts?: ReadonlyArray<string>;
     collapsedProjectGroups?: readonly string[];
     projectDrawerCollapsedFolders?: readonly string[];
+    projectDrawerFavoritesOnly?: boolean;
     dismissedDatabaseStorageNotices?: readonly string[];
     composerEnterBehavior?: ComposerEnterBehavior;
     followUpBehavior?: FollowUpBehavior;
@@ -384,6 +393,9 @@ function sanitizePreferences(parsed: Preferences): Preferences {
     preferences.projectDrawerCollapsedFolders = parsed.projectDrawerCollapsedFolders.filter(
       (key): key is string => typeof key === "string",
     );
+  }
+  if (typeof parsed.projectDrawerFavoritesOnly === "boolean") {
+    preferences.projectDrawerFavoritesOnly = parsed.projectDrawerFavoritesOnly;
   }
   if (Array.isArray(parsed.dismissedDatabaseStorageNotices)) {
     preferences.dismissedDatabaseStorageNotices = parsed.dismissedDatabaseStorageNotices.filter(

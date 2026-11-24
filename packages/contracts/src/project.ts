@@ -615,3 +615,77 @@ export class ProjectWriteFileError extends Schema.TaggedError<ProjectWriteFileEr
     } as any);
   }
 }
+
+// T3 Zip: create-only files and folders for the Files panel. Begin.
+// Unlike writeFile, creation never replaces an entry: the server opens exclusively and fails
+// with `alreadyExists` when the name is taken.
+export const ProjectCreateEntryInput = Schema.Struct({
+  cwd: TrimmedNonEmptyString,
+  relativePath: Schema.NonEmptyString.check(Schema.isMaxLength(PROJECT_WRITE_FILE_PATH_MAX_LENGTH)),
+  kind: Schema.Literals(["file", "directory"]),
+  /** File contents; ignored for folders. */
+  contents: Schema.optional(Schema.String),
+});
+export type ProjectCreateEntryInput = typeof ProjectCreateEntryInput.Type;
+
+export const ProjectCreateEntryResult = Schema.Struct({
+  relativePath: Schema.NonEmptyString,
+});
+export type ProjectCreateEntryResult = typeof ProjectCreateEntryResult.Type;
+
+export class ProjectCreateEntryError extends Schema.TaggedError<ProjectCreateEntryError>()(
+  "ProjectCreateEntryError",
+  {
+    cwd: Schema.optional(TrimmedNonEmptyString),
+    relativePath: Schema.optional(Schema.NonEmptyString),
+    alreadyExists: Schema.optional(Schema.Boolean),
+    failure: Schema.optional(ProjectFileFailure),
+    resolvedPath: Schema.optional(Schema.NonEmptyString),
+    resolvedWorkspaceRoot: Schema.optional(TrimmedNonEmptyString),
+    operation: Schema.optional(ProjectFileOperation),
+    operationPath: Schema.optional(Schema.NonEmptyString),
+    message: TrimmedNonEmptyString,
+    cause: Schema.optional(Schema.Defect()),
+  },
+) {}
+
+// Renaming never replaces an entry either. Deleting moves the entry to the Trash, which the
+// server does only on macOS, or deletes it permanently; the client picks one before confirming.
+export const ProjectRenameEntryInput = Schema.Struct({
+  cwd: TrimmedNonEmptyString,
+  relativePath: Schema.NonEmptyString.check(Schema.isMaxLength(PROJECT_WRITE_FILE_PATH_MAX_LENGTH)),
+  newRelativePath: Schema.NonEmptyString.check(
+    Schema.isMaxLength(PROJECT_WRITE_FILE_PATH_MAX_LENGTH),
+  ),
+});
+export type ProjectRenameEntryInput = typeof ProjectRenameEntryInput.Type;
+
+export const ProjectDeleteEntryInput = Schema.Struct({
+  cwd: TrimmedNonEmptyString,
+  relativePath: Schema.NonEmptyString.check(Schema.isMaxLength(PROJECT_WRITE_FILE_PATH_MAX_LENGTH)),
+  mode: Schema.Literals(["trash", "permanent"]),
+});
+export type ProjectDeleteEntryInput = typeof ProjectDeleteEntryInput.Type;
+
+export const ProjectEntryResult = Schema.Struct({
+  relativePath: Schema.NonEmptyString,
+});
+export type ProjectEntryResult = typeof ProjectEntryResult.Type;
+
+export class ProjectEntryChangeError extends Schema.TaggedError<ProjectEntryChangeError>()(
+  "ProjectEntryChangeError",
+  {
+    cwd: Schema.optional(TrimmedNonEmptyString),
+    relativePath: Schema.optional(Schema.NonEmptyString),
+    alreadyExists: Schema.optional(Schema.Boolean),
+    trashUnavailable: Schema.optional(Schema.Boolean),
+    failure: Schema.optional(ProjectFileFailure),
+    resolvedPath: Schema.optional(Schema.NonEmptyString),
+    resolvedWorkspaceRoot: Schema.optional(TrimmedNonEmptyString),
+    operation: Schema.optional(ProjectFileOperation),
+    operationPath: Schema.optional(Schema.NonEmptyString),
+    message: TrimmedNonEmptyString,
+    cause: Schema.optional(Schema.Defect()),
+  },
+) {}
+// T3 Zip: create-only files and folders for the Files panel. End.

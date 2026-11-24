@@ -6,12 +6,19 @@ import {
   isEmptySharedProjectRail,
   localProjectRailFromShared,
   nextProjectRailEditTime,
+  railProjectReturn,
   sameSharedProjectRail,
   sharedProjectRailContentFromLocal,
   type LocalProjectRail,
   type SharedProjectRail,
   type SharedProjectRailContent,
 } from "@t3tools/client-runtime/state/project-rail";
+
+import {
+  normalizeThreadStatusFilter,
+  threadStatusFilters,
+  type ThreadStatusFilter,
+} from "@t3tools/client-runtime/state/thread-status-filter";
 
 import { resolveStorage } from "../../lib/storage";
 import {
@@ -44,7 +51,10 @@ const PersistedRailSchema = Schema.Struct({
   // Project rail key to the time it comes back; added after hidden projects.
   snoozedProjects: Schema.optionalKey(Schema.Record(Schema.String, Schema.String)),
   // "favorites" is from before Favorites became its own toggle; it loads as favoritesOnly.
-  filter: Schema.optionalKey(Schema.Literals(["all", "favorites", "waiting", "working", "done"])),
+  // "workingDone" is the thread list's tab; it decodes so it can be moved onto a tab the rail shows.
+  filter: Schema.optionalKey(
+    Schema.Literals(["all", "favorites", "waiting", "working", "done", "workingDone"]),
+  ),
   favoritesOnly: Schema.optionalKey(Schema.Boolean),
   // The thread column beside the rail, added after the folders and filters.
   threadColumnOpen: Schema.optionalKey(Schema.Boolean),
@@ -61,7 +71,20 @@ const PersistedRailSchema = Schema.Struct({
 type PersistedRail = Omit<Required<typeof PersistedRailSchema.Type>, "filter"> & {
   readonly filter: RailFilter;
 };
-export type RailFilter = "all" | "waiting" | "working" | "done";
+/** The rail's own queue filter, shown without the thread list; it keeps Working and Done apart. */
+type RailFilter = Exclude<ThreadStatusFilter, "workingDone">;
+
+const isRailFilter = (filter: ThreadStatusFilter): filter is RailFilter => filter !== "workingDone";
+
+/** The rail's filter tabs: the split set, which keeps Working and Done apart. */
+export const RAIL_QUEUE_FILTERS: ReadonlyArray<RailFilter> =
+  threadStatusFilters(false).filter(isRailFilter);
+
+/** A saved filter moved onto a tab the rail shows; see `normalizeThreadStatusFilter`. */
+function railFilterFromSaved(filter: ThreadStatusFilter): RailFilter {
+  const normalized = normalizeThreadStatusFilter(filter, false);
+  return isRailFilter(normalized) ? normalized : DEFAULT_RAIL.filter;
+}
 
 const decodePersistedRail = Schema.decodeUnknownOption(PersistedRailSchema);
 
@@ -359,9 +382,24 @@ export const useProjectRailStore = create<ProjectRailStore>()(
             ? {}
             : filter === "favorites"
               ? { filter: "all" as const, favoritesOnly: true }
-              : { filter }),
+              : { filter: railFilterFromSaved(filter) }),
         };
       },
     },
   ),
 );
+
+/**
+ * Brings a hidden or snoozed project back to the rail, where it was, through the same actions
+ * the Hidden and Snoozed shelves' Show and Wake buttons call, so the shared rail syncs as it does
+ * for them. A project already in the rail is left alone. Returns whether anything changed.
+ */
+export function bringBackRailProject(projectKey: string): boolean {
+  const store = useProjectRailStore.getState();
+  const change = railProjectReturn(store, projectKey);
+  if (change === null) return false;
+  if (change.show) store.showProject(projectKey);
+  if (change.wake) store.wakeProjects([projectKey]);
+  store.revealProject(projectKey);
+  return true;
+}

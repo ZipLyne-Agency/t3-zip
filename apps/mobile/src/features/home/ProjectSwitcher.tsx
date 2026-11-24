@@ -36,7 +36,7 @@ import { cn } from "../../lib/cn";
 import { NATIVE_LIQUID_GLASS_SUPPORTED } from "../../native/native-glass";
 import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
 import type { DrawerShelfKind } from "./drawer-shelves";
-import { visibleProjectDrawerItems } from "./project-drawer";
+import { favoriteProjectDrawerItems, visibleProjectDrawerItems } from "./project-drawer";
 import {
   CountPill,
   DRAWER_ICON_SIZE,
@@ -49,11 +49,13 @@ import {
 import {
   DrawerShelfPanel,
   DrawerShelfTiles,
+  useDesktopUpdateNote,
   shelfCounts,
   useDrawerSettledShelf,
   useShelfTitles,
 } from "./ProjectDrawerShelves";
-import { filterProjectSwitcherRows, type ProjectSwitcherRow } from "./project-switcher";
+import { DrawerSearchResults } from "./ProjectDrawerSearch";
+import type { ProjectSwitcherRow } from "./project-switcher";
 import type { ProjectDrawerData, ProjectSwitcherRows } from "./useProjectDrawer";
 
 const ButtonGlass = withUniwind(GlassView, {
@@ -255,8 +257,11 @@ function DrawerBody(
   }));
 
   const searching = query.trim() !== "";
-  const fixed = filterProjectSwitcherRows(drawer.model.fixed, query);
-  const items = visibleProjectDrawerItems(drawer.model.items, query);
+  const { favoritesOnly } = drawer;
+  const listed = favoritesOnly
+    ? favoriteProjectDrawerItems(drawer.model.items)
+    : drawer.model.items;
+  const items = visibleProjectDrawerItems(listed);
 
   return (
     <View className="flex-1">
@@ -314,10 +319,20 @@ function DrawerBody(
                 minimumFontScale={0.8}
                 className="flex-1 font-t3-semibold text-foreground"
               >
-                {panel === null
-                  ? gt("Projects", { $context: "project switcher drawer title" })
-                  : shelfTitles[panel].panel}
+                {panel !== null
+                  ? shelfTitles[panel].panel
+                  : favoritesOnly
+                    ? gt("Favorites", { $context: "project switcher drawer title: favorites only" })
+                    : gt("Projects", { $context: "project switcher drawer title" })}
               </AppText>
+              {/* Only a shared layout has favorites; the title takes the space, so nothing moves. */}
+              {panel === null && drawer.model.shared ? (
+                <FavoritesOnlyButton
+                  on={favoritesOnly}
+                  favoriteCount={favoriteProjectDrawerItems(drawer.model.items).length}
+                  onChange={drawer.setFavoritesOnly}
+                />
+              ) : null}
               {panel === null ? (
                 <Pressable
                   accessibilityRole="button"
@@ -344,7 +359,7 @@ function DrawerBody(
                   <SearchField
                     autoFocus={false}
                     inputRef={searchRef}
-                    accessibilityLabel={gt("Search projects")}
+                    accessibilityLabel={gt("Search projects and threads")}
                     clearAccessibilityLabel={gt("Clear search")}
                     placeholder={gt("Search", { $context: "search field placeholder" })}
                     value={query}
@@ -367,51 +382,65 @@ function DrawerBody(
                         }}
                       />
                     ) : null}
-                    {fixed.map((row) => (
-                      <DrawerRow
-                        key={row.key ?? "all"}
-                        row={row}
-                        selected={row.key === drawer.selectedKey}
-                        nowMs={drawer.nowMs}
-                        onPress={() => pick(row.key)}
+                    {searching ? (
+                      <DrawerSearchResults
+                        drawer={drawer}
+                        query={query}
+                        onPickProject={pick}
+                        onOpenThread={openThread}
                       />
-                    ))}
-                    {!drawer.model.shared && items.length > 0 ? (
-                      <AppText
-                        textRole="label"
-                        accessibilityRole="header"
-                        numberOfLines={1}
-                        className="px-3 pb-1.5 pt-3.5 font-t3-medium text-foreground-muted"
-                      >
-                        {gt("Recent", { $context: "project switcher: projects by last activity" })}
-                      </AppText>
-                    ) : null}
-                    {items.map((item) =>
-                      item.kind === "folder" ? (
-                        <DrawerFolderRow
-                          key={`folder:${item.folderId}`}
-                          item={item}
-                          drawer={drawer}
-                          searching={searching}
-                        />
-                      ) : (
-                        <DrawerProjectRow
-                          key={`project:${item.row.key}`}
-                          item={item}
-                          drawer={drawer}
-                          selected={item.row.key === drawer.selectedKey}
-                          onPick={() => pick(item.row.key)}
-                          onClose={close}
-                        />
-                      ),
+                    ) : (
+                      <>
+                        {drawer.model.fixed.map((row) => (
+                          <DrawerRow
+                            key={row.key ?? "all"}
+                            row={row}
+                            selected={row.key === drawer.selectedKey}
+                            nowMs={drawer.nowMs}
+                            onPress={() => pick(row.key)}
+                          />
+                        ))}
+                        {!drawer.model.shared && items.length > 0 ? (
+                          <AppText
+                            textRole="label"
+                            accessibilityRole="header"
+                            numberOfLines={1}
+                            className="px-3 pb-1.5 pt-3.5 font-t3-medium text-foreground-muted"
+                          >
+                            {gt("Recent", {
+                              $context: "project switcher: projects by last activity",
+                            })}
+                          </AppText>
+                        ) : null}
+                        {items.map((item) =>
+                          item.kind === "folder" ? (
+                            <DrawerFolderRow
+                              key={`folder:${item.folderId}`}
+                              item={item}
+                              drawer={drawer}
+                            />
+                          ) : (
+                            <DrawerProjectRow
+                              key={`project:${item.row.key}`}
+                              item={item}
+                              flat={favoritesOnly}
+                              drawer={drawer}
+                              selected={item.row.key === drawer.selectedKey}
+                              onPick={() => pick(item.row.key)}
+                              onClose={close}
+                            />
+                          ),
+                        )}
+                        {favoritesOnly && items.length === 0 ? (
+                          <AppText textRole="body" className="px-3 py-4 text-foreground-muted">
+                            {gt("No favorites yet. Hold a project and choose Add to Favorites.")}
+                          </AppText>
+                        ) : null}
+                      </>
                     )}
-                    {fixed.length + items.length === 0 ? (
-                      <AppText textRole="body" className="px-3 py-4 text-foreground-muted">
-                        {gt("No projects match.")}
-                      </AppText>
-                    ) : null}
                   </ScrollView>
                 </MaskedView>
+                {drawer.model.shared ? null : <DesktopUpdateLine />}
                 <View style={{ paddingBottom: bottomInset }}>
                   <DrawerShelfTiles
                     counts={shelfCounts(drawer, settled)}
@@ -424,6 +453,50 @@ function DrawerBody(
         </Animated.View>
       </GestureDetector>
     </View>
+  );
+}
+
+/**
+ * Until the Mac app shares its project layout, the drawer is a plain list; this says why.
+ * It sits outside the scrolling list, so the list keeps its place when the layout arrives.
+ */
+function DesktopUpdateLine() {
+  const note = useDesktopUpdateNote();
+  return (
+    <AppText textRole="footnote" className="px-5 pb-2 pt-1 text-foreground-muted">
+      {note}
+    </AppText>
+  );
+}
+
+/** The desktop rail's star: lists only favorite projects, or every project again. */
+function FavoritesOnlyButton(props: {
+  readonly on: boolean;
+  readonly favoriteCount: number;
+  readonly onChange: (on: boolean) => void;
+}) {
+  const gt = useGT();
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityState={{ selected: props.on }}
+      accessibilityLabel={
+        props.on
+          ? gt("Show All Projects")
+          : gt("Show Favorites Only ({count})", { count: props.favoriteCount })
+      }
+      onPress={() => props.onChange(!props.on)}
+      className={cn(
+        "h-11 w-11 items-center justify-center rounded-full active:opacity-60",
+        props.on && "bg-subtle-strong",
+      )}
+    >
+      <SymbolView
+        name={props.on ? "star.fill" : "star"}
+        size={18}
+        tintColorClassName={props.on ? "accent-warning-foreground" : "accent-foreground-muted"}
+      />
+    </Pressable>
   );
 }
 

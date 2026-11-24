@@ -41,8 +41,12 @@ import { useQueuedThreadKeys } from "../../state/use-thread-outbox";
 import { useWorkspaceState } from "../../state/workspace";
 import { useSavedRemoteConnections } from "../../state/use-remote-environment-registry";
 import { useThreadListV2 } from "./useThreadListV2";
-import { ThreadStatusFilterBar, ThreadStatusSectionHeader } from "./ThreadStatusFilterBar";
-import { threadStatusDoneThreads } from "./threadStatusFilterList";
+import {
+  ThreadStatusFilterBar,
+  ThreadStatusProjectHeader,
+  ThreadStatusSectionHeader,
+} from "./ThreadStatusFilterBar";
+import { buildThreadStatusProjectGroups, threadStatusDoneThreads } from "./threadStatusFilterList";
 import { useThreadStatusFilter } from "./use-thread-status-filter";
 import { useSidebarRowThreadKey } from "./useSidebarRowThreadKey";
 import { useThreadJumpShortcuts } from "../keyboard/threadKeyboardShortcuts";
@@ -84,6 +88,9 @@ import {
 } from "./threadListV2";
 import { useSelectWorkspaceDetail } from "../layout/workspace/useSelectWorkspaceDetail";
 import { NativeScrollView } from "../../native/NativeScrollViewMarker";
+import { useContentTopInset } from "../../components/ui/useBarInset";
+import { threadStatusFilters } from "@t3tools/client-runtime/state/thread-status-filter";
+import { WorkingDoneHalfEmpty, WorkingDoneHalves } from "./WorkingDoneHalves";
 
 type SidebarListItem =
   | ThreadListV2ListItem
@@ -131,6 +138,7 @@ function ThreadNavigationSidebarPane(props: ThreadNavigationSidebarProps) {
   const drawerColor = materialTheme["--color-drawer"];
 
   const insets = useSafeAreaInsets();
+  const contentTopInset = useContentTopInset();
   const { fabClearance, fabSize } = useAndroidControlSizing();
   const projects = useProjects();
   const threads = useAtomValue(steadyNavigationThreadShellsAtom);
@@ -139,6 +147,9 @@ function ThreadNavigationSidebarPane(props: ThreadNavigationSidebarProps) {
   const { savedConnectionsById } = useSavedRemoteConnections();
   const openSwipeableRef = useRef<SwipeableMethods | null>(null);
   const sidebarScrollGesture = useNativeGesture();
+  // The combined Working · Done tab scrolls each half on its own.
+  const doneScrollGesture = useNativeGesture();
+  const workingScrollGesture = useNativeGesture();
   const {
     archiveThread,
     confirmDeleteThread,
@@ -218,6 +229,10 @@ function ThreadNavigationSidebarPane(props: ThreadNavigationSidebarProps) {
       ),
     [projectScopes],
   );
+  const statusProjectGroups = useMemo(
+    () => buildThreadStatusProjectGroups(projectScopes),
+    [projectScopes],
+  );
   const selectedProjectScope = resolveHomeProjectFilterScope(projectScopes, projects, options);
   const threadSearch = useThreadSearch(
     searchEnvironmentIds,
@@ -285,6 +300,7 @@ function ThreadNavigationSidebarPane(props: ThreadNavigationSidebarProps) {
   const {
     layout: threadListV2Layout,
     items: threadListV2Items,
+    splitItems: workingDoneItems,
     contentOnlyThreadKeys,
     olderSettledShelf,
     statusEntries,
@@ -295,6 +311,7 @@ function ThreadNavigationSidebarPane(props: ThreadNavigationSidebarProps) {
     pendingTasks,
     environmentId: options.selectedEnvironmentId,
     projectRefs: selectedProjectScope === null ? null : selectedProjectScope.projectRefs,
+    statusProjectGroups,
     searchQuery: props.searchQuery,
     searchMatches: threadSearchMatchByKey,
     settlementEnvironmentIds,
@@ -389,6 +406,7 @@ function ThreadNavigationSidebarPane(props: ThreadNavigationSidebarProps) {
     onScroll: onFabScroll,
     onScrollBeginDrag: handleScrollBeginDrag,
   });
+  const halvesGate = useSwipeableScrollGate({ onScrollBeginDrag: handleScrollBeginDrag });
   // Recycle equality needs project/search data for titles and favicons; keep the minute clock on items to limit updates.
   const listExtraData = {
     activeNewTask,
@@ -410,176 +428,192 @@ function ThreadNavigationSidebarPane(props: ThreadNavigationSidebarProps) {
     }
     return false;
   };
-  const renderListItem = ({ item }: { readonly item: SidebarListItem }) => {
-    switch (item.type) {
-      case "v2-pending": {
-        const pendingScopeKey = scopedProjectKey(
-          item.pendingTask.environmentId,
-          item.pendingTask.projectId,
-        );
-        return (
-          <ThreadListV2PendingRow
-            pendingTask={item.pendingTask}
-            selected={
-              activeNewTask?.pendingKey === item.pendingTask.key ||
-              (item.pendingTask.kind === "pending" &&
-                scopedThreadKey(
-                  item.pendingTask.environmentId,
-                  item.pendingTask.message.threadId,
-                ) === selectedThreadKey)
-            }
-            project={projectByKey.get(pendingScopeKey) ?? null}
-            environmentLabel={
-              Object.keys(savedConnectionsById).length > 1
-                ? (savedConnectionsById[item.pendingTask.environmentId]?.environmentLabel ?? null)
-                : null
-            }
-            environmentMachine={machineByEnvironmentId.get(item.pendingTask.environmentId)}
-            pane="sidebar"
-            showPendingDivider={item.showPendingDivider}
-            onSelectPendingTask={props.onOpenPendingTask}
-            onDeletePendingTask={confirmDeletePendingTask}
-            fullSwipeWidth={props.width - 20}
-            onSwipeableClose={handleSwipeableClose}
-            onSwipeableWillOpen={handleSwipeableWillOpen}
-            simultaneousSwipeGesture={sidebarScrollGesture}
-          />
-        );
+  const renderListItemIn =
+    (scrollGesture: ScrollGesture) => (info: { readonly item: SidebarListItem }) => {
+      const { item } = info;
+      switch (item.type) {
+        case "v2-pending": {
+          const pendingScopeKey = scopedProjectKey(
+            item.pendingTask.environmentId,
+            item.pendingTask.projectId,
+          );
+          return (
+            <ThreadListV2PendingRow
+              pendingTask={item.pendingTask}
+              selected={
+                activeNewTask?.pendingKey === item.pendingTask.key ||
+                (item.pendingTask.kind === "pending" &&
+                  scopedThreadKey(
+                    item.pendingTask.environmentId,
+                    item.pendingTask.message.threadId,
+                  ) === selectedThreadKey)
+              }
+              project={projectByKey.get(pendingScopeKey) ?? null}
+              environmentLabel={
+                Object.keys(savedConnectionsById).length > 1
+                  ? (savedConnectionsById[item.pendingTask.environmentId]?.environmentLabel ?? null)
+                  : null
+              }
+              environmentMachine={machineByEnvironmentId.get(item.pendingTask.environmentId)}
+              pane="sidebar"
+              showPendingDivider={item.showPendingDivider}
+              onSelectPendingTask={props.onOpenPendingTask}
+              onDeletePendingTask={confirmDeletePendingTask}
+              fullSwipeWidth={props.width - 20}
+              onSwipeableClose={handleSwipeableClose}
+              onSwipeableWillOpen={handleSwipeableWillOpen}
+              simultaneousSwipeGesture={scrollGesture}
+            />
+          );
+        }
+        case "v2-thread": {
+          const thread = item.item.thread;
+          const scopeKey = scopedProjectKey(thread.environmentId, thread.projectId);
+          return (
+            <ThreadListV2Row
+              onNewThreadOnBranch={props.onNewThreadOnBranch}
+              thread={thread}
+              variant={item.item.variant}
+              hasQueuedMessages={item.hasQueuedMessages}
+              snoozed={item.item.snoozed}
+              pinned={item.item.pinned}
+              wokeAt={item.item.wokeAt}
+              snoozePresetMinute={item.snoozePresetMinute ?? ""}
+              snoozeWakeLabelText={item.snoozeWakeLabelText}
+              timeLabel={item.timeLabel}
+              project={projectByKey.get(scopeKey) ?? null}
+              providerInstance={resolveProviderInstance(thread)}
+              providers={providersByEnvironmentId.get(thread.environmentId)}
+              environmentLabel={
+                Object.keys(savedConnectionsById).length > 1
+                  ? (savedConnectionsById[thread.environmentId]?.environmentLabel ?? null)
+                  : null
+              }
+              environmentMachine={machineByEnvironmentId.get(thread.environmentId)}
+              searchMatch={
+                // Only rows listed for their messages show one and open at it.
+                contentOnlyThreadKeys.has(
+                  threadSearchMatchKey({
+                    environmentId: thread.environmentId,
+                    threadId: thread.id,
+                  }),
+                )
+                  ? threadSearchMatchByKey.get(
+                      threadSearchMatchKey({
+                        environmentId: thread.environmentId,
+                        threadId: thread.id,
+                      }),
+                    )
+                  : undefined
+              }
+              searchQuery={threadSearch.query}
+              pane="sidebar"
+              selected={
+                !activeNewTask &&
+                scopedThreadKey(thread.environmentId, thread.id) === selectedThreadKey
+              }
+              fullSwipeWidth={props.width - 20}
+              onSelectThread={handleSelectThread}
+              onOpenThreadPullRequests={handleOpenThreadPullRequests}
+              onDeleteThread={confirmDeleteThread}
+              onArchiveThread={archiveThread}
+              onClearFromDone={item.doneSection ? clearThreadFromDone : undefined}
+              onRenameThread={renameThread}
+              onRegenerateThreadTitle={regenerateThreadTitle}
+              titleRegenerationSupported={titleRegenerationEnvironmentIds.has(thread.environmentId)}
+              settlementSupported={settlementEnvironmentIds.has(thread.environmentId)}
+              onSettleThread={settleThread}
+              snoozeSupported={snoozeEnvironmentIds.has(thread.environmentId)}
+              snoozePresets={snoozePresetsByEnvironmentId.get(thread.environmentId)}
+              pinningSupported={pinningEnvironmentIds.has(thread.environmentId)}
+              autoSettleOptOutSupported={autoSettleOptOutEnvironmentIds.has(thread.environmentId)}
+              muteSupported={muteEnvironmentIds.has(thread.environmentId)}
+              onSetThreadMuted={setThreadMuted}
+              reorderSupported={
+                item.item.pinned
+                  ? pinReorderEnvironmentIds.has(thread.environmentId)
+                  : !workingShelfEnabled && activeReorderEnvironmentIds.has(thread.environmentId)
+              }
+              canMoveUp={item.canMoveUp}
+              canMoveDown={item.canMoveDown}
+              onSnoozeThread={snoozeThread}
+              onUnsnoozeThread={unsnoozeThread}
+              onUnsettleThread={unsettleThread}
+              onPinThread={pinThread}
+              onUnpinThread={unpinThread}
+              onSetThreadAutoSettle={setThreadAutoSettle}
+              onMoveThread={moveThread}
+              onSwipeableClose={handleSwipeableClose}
+              onSwipeableWillOpen={handleSwipeableWillOpen}
+              simultaneousSwipeGesture={scrollGesture}
+            />
+          );
+        }
+        case "v2-status-section":
+          return (
+            <ThreadStatusSectionHeader
+              section={item.section}
+              count={item.count}
+              clearAllCount={item.clearAllCount}
+              onClearAll={clearAllFromDone}
+              pane="sidebar"
+            />
+          );
+        case "v2-status-project":
+          return (
+            <ThreadStatusProjectHeader
+              title={item.title}
+              project={item.project}
+              scratch={item.scratch}
+              count={item.count}
+              pane="sidebar"
+            />
+          );
+        case "v2-working-shelf":
+          return (
+            <ThreadListV2WorkingShelfHeader
+              count={item.count}
+              disabled={item.disabled}
+              expanded={item.expanded}
+              onToggle={toggleWorkingShelf}
+              pane="sidebar"
+            />
+          );
+        case "v2-snoozed-shelf":
+          return (
+            <ThreadListV2SnoozedShelfHeader
+              count={item.count}
+              disabled={item.disabled}
+              expanded={item.expanded}
+              onToggle={toggleSnoozedShelf}
+              pane="sidebar"
+            />
+          );
+        case "v2-settled-shelf":
+          return (
+            <ThreadListV2SettledShelfHeader
+              count={item.count}
+              disabled={item.disabled}
+              expanded={item.expanded}
+              onToggle={toggleSettledShelf}
+              pane="sidebar"
+            />
+          );
+        case "v2-show-more":
+          return (
+            <ThreadListV2ShowMoreRow
+              pane="sidebar"
+              hiddenCount={item.hiddenCount}
+              {...(item.state === undefined ? {} : { state: item.state })}
+              onPress={() => {
+                olderSettledShelf.retry();
+                showMoreSettled();
+              }}
+            />
+          );
       }
-      case "v2-thread": {
-        const thread = item.item.thread;
-        const scopeKey = scopedProjectKey(thread.environmentId, thread.projectId);
-        return (
-          <ThreadListV2Row
-            onNewThreadOnBranch={props.onNewThreadOnBranch}
-            thread={thread}
-            variant={item.item.variant}
-            hasQueuedMessages={item.hasQueuedMessages}
-            snoozed={item.item.snoozed}
-            pinned={item.item.pinned}
-            wokeAt={item.item.wokeAt}
-            snoozePresetMinute={item.snoozePresetMinute ?? ""}
-            snoozeWakeLabelText={item.snoozeWakeLabelText}
-            timeLabel={item.timeLabel}
-            project={projectByKey.get(scopeKey) ?? null}
-            providerInstance={resolveProviderInstance(thread)}
-            providers={providersByEnvironmentId.get(thread.environmentId)}
-            environmentLabel={
-              Object.keys(savedConnectionsById).length > 1
-                ? (savedConnectionsById[thread.environmentId]?.environmentLabel ?? null)
-                : null
-            }
-            environmentMachine={machineByEnvironmentId.get(thread.environmentId)}
-            searchMatch={
-              // Only rows listed for their messages show one and open at it.
-              contentOnlyThreadKeys.has(
-                threadSearchMatchKey({ environmentId: thread.environmentId, threadId: thread.id }),
-              )
-                ? threadSearchMatchByKey.get(
-                    threadSearchMatchKey({
-                      environmentId: thread.environmentId,
-                      threadId: thread.id,
-                    }),
-                  )
-                : undefined
-            }
-            searchQuery={threadSearch.query}
-            pane="sidebar"
-            selected={
-              !activeNewTask &&
-              scopedThreadKey(thread.environmentId, thread.id) === selectedThreadKey
-            }
-            fullSwipeWidth={props.width - 20}
-            onSelectThread={handleSelectThread}
-            onOpenThreadPullRequests={handleOpenThreadPullRequests}
-            onDeleteThread={confirmDeleteThread}
-            onArchiveThread={archiveThread}
-            onClearFromDone={item.doneSection ? clearThreadFromDone : undefined}
-            onRenameThread={renameThread}
-            onRegenerateThreadTitle={regenerateThreadTitle}
-            titleRegenerationSupported={titleRegenerationEnvironmentIds.has(thread.environmentId)}
-            settlementSupported={settlementEnvironmentIds.has(thread.environmentId)}
-            onSettleThread={settleThread}
-            snoozeSupported={snoozeEnvironmentIds.has(thread.environmentId)}
-            snoozePresets={snoozePresetsByEnvironmentId.get(thread.environmentId)}
-            pinningSupported={pinningEnvironmentIds.has(thread.environmentId)}
-            autoSettleOptOutSupported={autoSettleOptOutEnvironmentIds.has(thread.environmentId)}
-            muteSupported={muteEnvironmentIds.has(thread.environmentId)}
-            onSetThreadMuted={setThreadMuted}
-            reorderSupported={
-              item.item.pinned
-                ? pinReorderEnvironmentIds.has(thread.environmentId)
-                : !workingShelfEnabled && activeReorderEnvironmentIds.has(thread.environmentId)
-            }
-            canMoveUp={item.canMoveUp}
-            canMoveDown={item.canMoveDown}
-            onSnoozeThread={snoozeThread}
-            onUnsnoozeThread={unsnoozeThread}
-            onUnsettleThread={unsettleThread}
-            onPinThread={pinThread}
-            onUnpinThread={unpinThread}
-            onSetThreadAutoSettle={setThreadAutoSettle}
-            onMoveThread={moveThread}
-            onSwipeableClose={handleSwipeableClose}
-            onSwipeableWillOpen={handleSwipeableWillOpen}
-            simultaneousSwipeGesture={sidebarScrollGesture}
-          />
-        );
-      }
-      case "v2-status-section":
-        return (
-          <ThreadStatusSectionHeader
-            section={item.section}
-            count={item.count}
-            clearAllCount={item.clearAllCount}
-            onClearAll={clearAllFromDone}
-            pane="sidebar"
-          />
-        );
-      case "v2-working-shelf":
-        return (
-          <ThreadListV2WorkingShelfHeader
-            count={item.count}
-            disabled={item.disabled}
-            expanded={item.expanded}
-            onToggle={toggleWorkingShelf}
-            pane="sidebar"
-          />
-        );
-      case "v2-snoozed-shelf":
-        return (
-          <ThreadListV2SnoozedShelfHeader
-            count={item.count}
-            disabled={item.disabled}
-            expanded={item.expanded}
-            onToggle={toggleSnoozedShelf}
-            pane="sidebar"
-          />
-        );
-      case "v2-settled-shelf":
-        return (
-          <ThreadListV2SettledShelfHeader
-            count={item.count}
-            disabled={item.disabled}
-            expanded={item.expanded}
-            onToggle={toggleSettledShelf}
-            pane="sidebar"
-          />
-        );
-      case "v2-show-more":
-        return (
-          <ThreadListV2ShowMoreRow
-            pane="sidebar"
-            hiddenCount={item.hiddenCount}
-            {...(item.state === undefined ? {} : { state: item.state })}
-            onPress={() => {
-              olderSettledShelf.retry();
-              showMoreSettled();
-            }}
-          />
-        );
-    }
-  };
+    };
+  const renderListItem = renderListItemIn(sidebarScrollGesture);
   const header = (
     <WorkspaceListHeader
       accessibilityLabel={gt("{appName}, Threads", { appName: "T3 Code" })}
@@ -615,6 +649,7 @@ function ThreadNavigationSidebarPane(props: ThreadNavigationSidebarProps) {
   const statusBar =
     props.searchQuery.trim().length > 0 ? null : (
       <ThreadStatusFilterBar
+        filters={threadStatusFilters(true)}
         selected={statusFilter}
         counts={statusCounts}
         openCount={statusEntries.length}
@@ -669,46 +704,126 @@ function ThreadNavigationSidebarPane(props: ThreadNavigationSidebarProps) {
     </View>
   );
 
+  const halfListProps = {
+    drawDistance: 500,
+    estimatedItemSize: 64,
+    extraData: listExtraData,
+    getItemType: (item: SidebarListItem) => item.type,
+    itemsAreEqual: sidebarItemsAreEqual,
+    keyExtractor: (item: SidebarListItem) => item.key,
+    contentInsetAdjustmentBehavior: "never" as const,
+    keyboardDismissMode: "on-drag" as const,
+    keyboardShouldPersistTaps: "handled" as const,
+    ...halvesGate.scrollGateHandlers,
+    recycleItems: true,
+    scrollEventThrottle: 16,
+    showsVerticalScrollIndicator: false,
+    style: styles.threadList,
+  };
+  const halvesBottomPadding =
+    Platform.OS === "ios"
+      ? Math.max(insets.bottom, 16) + 16
+      : floatingTabsEnabled
+        ? FLOATING_TABS.bottom + FLOATING_TABS.edge + fabSize
+        : Math.max(insets.bottom, 16) + fabClearance - insets.bottom;
+  // The halves do not scroll under the column's bar, so they start below it.
+  const halves =
+    workingDoneItems === null ? null : (
+      <View
+        className="flex-1"
+        style={{ paddingTop: (Platform.OS === "ios" ? contentTopInset : 0) + 6 }}
+      >
+        {statusBar}
+        <SwipeableScrollGateProvider enabled={halvesGate.swipeEnabled}>
+          <WorkingDoneHalves
+            pane="sidebar"
+            doneCount={statusCounts.done}
+            workingCount={statusCounts.working}
+            done={
+              <GestureDetector gesture={doneScrollGesture}>
+                <AnimatedLegendList
+                  // The header follows one scroll view: the Done half, which sits right under it.
+                  renderScrollComponent={Platform.OS === "ios" ? NativeScrollView : undefined}
+                  itemLayoutAnimation={THREAD_LIST_ROW_LAYOUT}
+                  data={workingDoneItems.done}
+                  {...halfListProps}
+                  renderItem={renderListItemIn(doneScrollGesture)}
+                  ListEmptyComponent={
+                    <WorkingDoneHalfEmpty pane="sidebar">
+                      {gt("No finished threads to check.")}
+                    </WorkingDoneHalfEmpty>
+                  }
+                  contentContainerStyle={[styles.threadListContent, { paddingBottom: 12 }]}
+                />
+              </GestureDetector>
+            }
+            working={
+              <GestureDetector gesture={workingScrollGesture}>
+                {/* oxlint-disable-next-line t3code/require-registered-list-scroll -- The header registers the Done half above; it follows one scroll view. */}
+                <AnimatedLegendList
+                  itemLayoutAnimation={THREAD_LIST_ROW_LAYOUT}
+                  data={workingDoneItems.working}
+                  {...halfListProps}
+                  renderItem={renderListItemIn(workingScrollGesture)}
+                  ListEmptyComponent={
+                    <WorkingDoneHalfEmpty pane="sidebar">
+                      {gt("Nothing is running right now.")}
+                    </WorkingDoneHalfEmpty>
+                  }
+                  contentContainerStyle={[
+                    styles.threadListContent,
+                    { paddingBottom: halvesBottomPadding },
+                  ]}
+                />
+              </GestureDetector>
+            }
+          />
+        </SwipeableScrollGateProvider>
+      </View>
+    );
+
   if (Platform.OS === "ios") {
     return (
       <>
         {header}
         <View className="flex-1">
-          <SwipeableScrollGateProvider enabled={swipeEnabled}>
-            <GestureDetector gesture={sidebarScrollGesture}>
-              <AnimatedLegendList
-                renderScrollComponent={NativeScrollView}
-                itemLayoutAnimation={THREAD_LIST_ROW_LAYOUT}
-                data={listItems}
-                drawDistance={500}
-                estimatedItemSize={64}
-                extraData={listExtraData}
-                getItemType={(item) => item.type}
-                itemsAreEqual={sidebarItemsAreEqual}
-                keyExtractor={(item) => item.key}
-                renderItem={renderListItem}
-                automaticallyAdjustsScrollIndicatorInsets
-                // The column lays the list under its bar, glass or solid; UIKit insets it past both.
-                contentInsetAdjustmentBehavior="automatic"
-                contentContainerStyle={[
-                  styles.threadListContent,
-                  {
-                    paddingBottom: Math.max(insets.bottom, 16) + 16,
-                    paddingTop: 6,
-                  },
-                ]}
-                keyboardDismissMode="on-drag"
-                keyboardShouldPersistTaps="handled"
-                {...scrollGateHandlers}
-                recycleItems
-                scrollEventThrottle={16}
-                showsVerticalScrollIndicator={false}
-                style={styles.threadList}
-                ListHeaderComponent={statusBar}
-                ListEmptyComponent={listEmpty}
-              />
-            </GestureDetector>
-          </SwipeableScrollGateProvider>
+          {halves ?? (
+            <SwipeableScrollGateProvider enabled={swipeEnabled}>
+              <GestureDetector gesture={sidebarScrollGesture}>
+                <AnimatedLegendList
+                  renderScrollComponent={NativeScrollView}
+                  itemLayoutAnimation={THREAD_LIST_ROW_LAYOUT}
+                  data={listItems}
+                  drawDistance={500}
+                  estimatedItemSize={64}
+                  extraData={listExtraData}
+                  getItemType={(item) => item.type}
+                  itemsAreEqual={sidebarItemsAreEqual}
+                  keyExtractor={(item) => item.key}
+                  renderItem={renderListItem}
+                  automaticallyAdjustsScrollIndicatorInsets
+                  // The column lays the list under its bar, glass or solid; UIKit insets it past both.
+                  contentInsetAdjustmentBehavior="automatic"
+                  contentContainerStyle={[
+                    styles.threadListContent,
+                    {
+                      paddingBottom: Math.max(insets.bottom, 16) + 16,
+                      paddingTop: 6,
+                    },
+                  ]}
+                  keyboardDismissMode="on-drag"
+                  keyboardShouldPersistTaps="handled"
+                  {...scrollGateHandlers}
+                  recycleItems
+                  scrollEventThrottle={16}
+                  showsVerticalScrollIndicator={false}
+                  style={styles.threadList}
+                  ListHeaderComponent={statusBar}
+                  ListEmptyComponent={listEmpty}
+                />
+              </GestureDetector>
+            </SwipeableScrollGateProvider>
+          )}
           <ThreadUndoNotice visible={props.visible} />
         </View>
       </>
@@ -729,47 +844,50 @@ function ThreadNavigationSidebarPane(props: ThreadNavigationSidebarProps) {
           overflow: "hidden",
         }}
       >
-        {listItems.length === 0 && appliedStatusFilter === "all" ? (
-          <View className="flex-1 items-center justify-center">{listEmpty}</View>
-        ) : (
-          <SwipeableScrollGateProvider enabled={swipeEnabled}>
-            <GestureDetector gesture={sidebarScrollGesture}>
-              {/* oxlint-disable-next-line t3code/require-registered-list-scroll -- The Android sidebar has no native header to register with. */}
-              <AnimatedLegendList
-                itemLayoutAnimation={THREAD_LIST_ROW_LAYOUT}
-                data={listItems}
-                drawDistance={500}
-                estimatedItemSize={64}
-                extraData={listExtraData}
-                getItemType={(item) => item.type}
-                itemsAreEqual={sidebarItemsAreEqual}
-                keyExtractor={(item) => item.key}
-                renderItem={renderListItem}
-                contentContainerStyle={{
-                  paddingBottom: floatingTabsEnabled
-                    ? FLOATING_TABS.bottom + FLOATING_TABS.edge + fabSize
-                    : Math.max(insets.bottom, 16) + fabClearance - insets.bottom,
-                  paddingTop: 6,
-                }}
-                keyboardDismissMode="on-drag"
-                keyboardShouldPersistTaps="handled"
-                {...scrollGateHandlers}
-                recycleItems
-                scrollEventThrottle={16}
-                showsVerticalScrollIndicator={false}
-                style={styles.threadList}
-                ListHeaderComponent={statusBar}
-                ListEmptyComponent={listEmpty}
-              />
-            </GestureDetector>
-          </SwipeableScrollGateProvider>
-        )}
+        {halves ??
+          (listItems.length === 0 && appliedStatusFilter === "all" ? (
+            <View className="flex-1 items-center justify-center">{listEmpty}</View>
+          ) : (
+            <SwipeableScrollGateProvider enabled={swipeEnabled}>
+              <GestureDetector gesture={sidebarScrollGesture}>
+                {/* oxlint-disable-next-line t3code/require-registered-list-scroll -- The Android sidebar has no native header to register with. */}
+                <AnimatedLegendList
+                  itemLayoutAnimation={THREAD_LIST_ROW_LAYOUT}
+                  data={listItems}
+                  drawDistance={500}
+                  estimatedItemSize={64}
+                  extraData={listExtraData}
+                  getItemType={(item) => item.type}
+                  itemsAreEqual={sidebarItemsAreEqual}
+                  keyExtractor={(item) => item.key}
+                  renderItem={renderListItem}
+                  contentContainerStyle={{
+                    paddingBottom: floatingTabsEnabled
+                      ? FLOATING_TABS.bottom + FLOATING_TABS.edge + fabSize
+                      : Math.max(insets.bottom, 16) + fabClearance - insets.bottom,
+                    paddingTop: 6,
+                  }}
+                  keyboardDismissMode="on-drag"
+                  keyboardShouldPersistTaps="handled"
+                  {...scrollGateHandlers}
+                  recycleItems
+                  scrollEventThrottle={16}
+                  showsVerticalScrollIndicator={false}
+                  style={styles.threadList}
+                  ListHeaderComponent={statusBar}
+                  ListEmptyComponent={listEmpty}
+                />
+              </GestureDetector>
+            </SwipeableScrollGateProvider>
+          ))}
       </View>
       {header}
       <ThreadUndoNotice visible={props.visible} />
     </View>
   );
 }
+
+type ScrollGesture = ReturnType<typeof useNativeGesture>;
 
 const styles = StyleSheet.create({
   threadList: {

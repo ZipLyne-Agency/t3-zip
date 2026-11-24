@@ -14,6 +14,8 @@ export function useSnoozedProjectKeys(): ReadonlySet<string> {
 export function useProjectSnoozeClock(): {
   readonly active: ReadonlySet<string>;
   readonly woken: readonly string[];
+  /** The time these were read at. */
+  readonly nowMs: number;
 } {
   const snoozed = useProjectRailStore((store) => store.snoozedProjects);
   // The minute tick re-renders callers; the time is read at that render.
@@ -23,5 +25,6 @@ export function useProjectSnoozeClock(): {
   return {
     active: activeSnoozedProjectKeys(snoozed, nowMs),
     woken: wokenSnoozedProjectKeys(snoozed, nowMs),
+    nowMs,
   };
 }

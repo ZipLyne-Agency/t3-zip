@@ -42,6 +42,7 @@ import {
 import { getThreadListV2OrderedSection } from "../threads/threadListV2";
 import { threadCanArchive } from "./threadArchive";
 import { resolveThreadTitleRename } from "../threads/thread-title-rename";
+import { confirmSettleWithAutomations } from "./settleAutomationGate";
 
 function environmentConfigLoaded(environmentId: EnvironmentThreadShell["environmentId"]) {
   return appAtomRegistry.get(environmentServerConfigsAtom).has(environmentId);
@@ -337,7 +338,18 @@ export function useThreadListActions(): {
         }
       },
     });
-  const settleThread = async (thread: EnvironmentThreadShell) => {
+  const settleThread = async (
+    thread: EnvironmentThreadShell,
+    options?: { readonly automationsConfirmed?: boolean },
+  ) => {
+    if (
+      options?.automationsConfirmed !== true &&
+      !(await confirmSettleWithAutomations([
+        { environmentId: thread.environmentId, threadId: thread.id },
+      ]))
+    ) {
+      return false;
+    }
     const key = scopedThreadKey(thread.environmentId, thread.id);
     const plan = ThreadUndo.planThreadUndo("settle", thread);
     let claim: ReturnType<typeof ThreadUndo.begin> | undefined;
@@ -713,8 +725,15 @@ export function useThreadListActions(): {
           : "active";
     if (section === "settled") {
       if (!environmentConfigLoaded(thread.environmentId)) return false;
+      if (
+        !(await confirmSettleWithAutomations([
+          { environmentId: thread.environmentId, threadId: thread.id },
+        ]))
+      ) {
+        return false;
+      }
       appAtomRegistry.set(threadDropBusyAtom, true);
-      const settled = await settleThread(thread);
+      const settled = await settleThread(thread, { automationsConfirmed: true });
       appAtomRegistry.set(threadDropBusyAtom, false);
       return settled;
     }

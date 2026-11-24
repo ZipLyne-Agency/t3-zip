@@ -51,16 +51,26 @@ export function useDrawerSettledShelf(drawer: ProjectDrawerData, open: boolean) 
 
 export type DrawerSettledShelf = ReturnType<typeof useDrawerSettledShelf>;
 
+/** Each tile's count; hidden projects have no count until the desktop shares its layout. */
 export function shelfCounts(
   drawer: ProjectDrawerData,
   settled: DrawerSettledShelf,
-): Record<DrawerShelfKind, number> {
+): Record<DrawerShelfKind, number | null> {
   return {
     snoozed: drawer.shelves.snoozed.length + drawer.model.snoozed.length,
     muted: drawer.shelves.muted.length,
     settled: settled.count,
-    hidden: drawer.model.hidden.length,
+    hidden: drawer.model.shared ? drawer.model.hidden.length : null,
   };
+}
+
+/** Why folders, hidden and snoozed projects, and most project actions are missing. */
+export function useDesktopUpdateNote(): string {
+  const gt = useGT();
+  return gt("Folders and the full project menu appear after you update T3 Zip on your Mac.", {
+    $context:
+      "project drawer: the Mac app has not shared its project layout yet, so only a simple list shows",
+  });
 }
 
 export function useShelfTitles(): Record<DrawerShelfKind, { tile: string; panel: string }> {
@@ -75,7 +85,7 @@ export function useShelfTitles(): Record<DrawerShelfKind, { tile: string; panel:
 
 /** The four shelves under the project list, each a tile that opens its list in the drawer. */
 export function DrawerShelfTiles(props: {
-  readonly counts: Record<DrawerShelfKind, number>;
+  readonly counts: Record<DrawerShelfKind, number | null>;
   readonly onOpen: (kind: DrawerShelfKind) => void;
 }) {
   const gt = useGT();
@@ -87,10 +97,11 @@ export function DrawerShelfTiles(props: {
         <RowPressable
           key={kind}
           accessibilityRole="button"
-          accessibilityLabel={gt("{label}: {count}", {
-            label: titles[kind].tile,
-            count: props.counts[kind],
-          })}
+          accessibilityLabel={
+            props.counts[kind] === null
+              ? titles[kind].tile
+              : gt("{label}: {count}", { label: titles[kind].tile, count: props.counts[kind] })
+          }
           onPress={() => props.onOpen(kind)}
           className="h-14 flex-1 items-center justify-center gap-0.5 rounded-xl bg-subtle"
         >
@@ -100,14 +111,16 @@ export function DrawerShelfTiles(props: {
               size={14}
               tintColorClassName="accent-foreground-muted"
             />
-            <AppText
-              textRole="footnote"
-              numberOfLines={1}
-              className="font-t3-semibold text-foreground"
-              style={{ fontVariant: ["tabular-nums"] }}
-            >
-              {props.counts[kind]}
-            </AppText>
+            {props.counts[kind] === null ? null : (
+              <AppText
+                textRole="footnote"
+                numberOfLines={1}
+                className="font-t3-semibold text-foreground"
+                style={{ fontVariant: ["tabular-nums"] }}
+              >
+                {props.counts[kind]}
+              </AppText>
+            )}
           </View>
           <AppText
             textRole="caption"
@@ -124,20 +137,25 @@ export function DrawerShelfTiles(props: {
   );
 }
 
-function useUntilLabel() {
-  const gt = useGT();
+/** A wake time, short: the weekday within a week, the date after that. */
+export function useWakeTime() {
   const locale = useFormattingLocale();
   return (until: string, nowMs: number) => {
     const at = new Date(until);
     const withinWeek = at.getTime() - nowMs < 6 * 86_400_000;
-    const time = at.toLocaleString(
+    return at.toLocaleString(
       locale,
       withinWeek
         ? { weekday: "short", hour: "numeric", minute: "2-digit" }
         : { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" },
     );
-    return gt("Until {time}", { time });
   };
+}
+
+function useUntilLabel() {
+  const gt = useGT();
+  const wakeTime = useWakeTime();
+  return (until: string, nowMs: number) => gt("Until {time}", { time: wakeTime(until, nowMs) });
 }
 
 /** One shelf's list, shown in place of the project list at the same size. */
@@ -151,7 +169,9 @@ export function DrawerShelfPanel(props: {
 }) {
   const gt = useGT();
   const untilLabel = useUntilLabel();
+  const updateNote = useDesktopUpdateNote();
   const { drawer, settled } = props;
+  const shared = drawer.model.shared;
   const { nowMs } = drawer;
   const threadUntil = (until: string | null | undefined) =>
     until ? untilLabel(until, nowMs) : null;
@@ -163,11 +183,14 @@ export function DrawerShelfPanel(props: {
       const projects = drawer.model.snoozed;
       const threads = drawer.shelves.snoozed;
       body =
-        projects.length + threads.length === 0 ? (
+        shared && projects.length + threads.length === 0 ? (
           <ShelfEmpty>{gt("Nothing is snoozed.")}</ShelfEmpty>
         ) : (
           <>
-            {projects.length > 0 ? <ShelfSubheading>{gt("Projects")}</ShelfSubheading> : null}
+            {projects.length > 0 || !shared ? (
+              <ShelfSubheading>{gt("Projects")}</ShelfSubheading>
+            ) : null}
+            {shared ? null : <ShelfEmpty>{updateNote}</ShelfEmpty>}
             {projects.map(({ row, until }) => (
               <ShelfProjectRow
                 key={row.key}
@@ -250,21 +273,22 @@ export function DrawerShelfPanel(props: {
     }
     case "hidden": {
       const projects = drawer.model.hidden;
-      body =
-        projects.length === 0 ? (
-          <ShelfEmpty>{gt("Nothing is hidden.")}</ShelfEmpty>
-        ) : (
-          projects.map((row) => (
-            <ShelfProjectRow
-              key={row.key}
-              row={row}
-              detail={null}
-              actionLabel={gt("Show")}
-              onAction={() => drawer.apply({ kind: "show", projectKey: row.key })}
-              onOpen={() => props.onPickProject(row)}
-            />
-          ))
-        );
+      body = !shared ? (
+        <ShelfEmpty>{updateNote}</ShelfEmpty>
+      ) : projects.length === 0 ? (
+        <ShelfEmpty>{gt("Nothing is hidden.")}</ShelfEmpty>
+      ) : (
+        projects.map((row) => (
+          <ShelfProjectRow
+            key={row.key}
+            row={row}
+            detail={null}
+            actionLabel={gt("Show")}
+            onAction={() => drawer.apply({ kind: "show", projectKey: row.key })}
+            onOpen={() => props.onPickProject(row)}
+          />
+        ))
+      );
       break;
     }
   }

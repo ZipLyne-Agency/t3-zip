@@ -1,9 +1,15 @@
 // @effect-diagnostics nodeBuiltinImport:off
 import * as NodeFS from "node:fs";
 import * as NodeFSP from "node:fs/promises";
+import * as NodeChildProcess from "node:child_process";
 
 import type {
   FilesystemEntryMetadata,
+  ProjectCreateEntryInput,
+  ProjectCreateEntryResult,
+  ProjectDeleteEntryInput,
+  ProjectEntryResult,
+  ProjectRenameEntryInput,
   FilesystemGetMetadataInput,
   FilesystemGetMetadataResult,
   ProjectReadFileInput,
@@ -102,6 +108,40 @@ export class WorkspaceBinaryFileError extends Schema.TaggedError<WorkspaceBinary
   }
 }
 
+// T3 Zip: create-only files and folders. Kept out of WorkspaceFileSystemError, which feeds the
+// shared failure mapping, so only createEntry can report it.
+export class WorkspaceEntryExistsError extends Schema.TaggedError<WorkspaceEntryExistsError>()(
+  "WorkspaceEntryExistsError",
+  {
+    workspaceRoot: Schema.String,
+    relativePath: Schema.String,
+    resolvedPath: Schema.String,
+  },
+) {
+  override get message(): string {
+    return `Workspace entry '${this.relativePath}' already exists in '${this.workspaceRoot}'.`;
+  }
+}
+
+// T3 Zip: rename and delete failures with no matching upstream operation literal.
+export class WorkspaceEntryChangeError extends Schema.TaggedError<WorkspaceEntryChangeError>()(
+  "WorkspaceEntryChangeError",
+  {
+    workspaceRoot: Schema.String,
+    relativePath: Schema.String,
+    operationPath: Schema.String,
+    operation: Schema.Literals(["lstat", "rename", "remove", "trash"]),
+    trashUnavailable: Schema.optional(Schema.Boolean),
+    cause: Schema.optional(Schema.Defect()),
+  },
+) {
+  override get message(): string {
+    return this.trashUnavailable
+      ? `The Trash is not available for '${this.relativePath}' in '${this.workspaceRoot}'.`
+      : `Workspace entry operation '${this.operation}' failed at '${this.operationPath}' (requested as '${this.relativePath}' in '${this.workspaceRoot}').`;
+  }
+}
+
 export const WorkspaceFileSystemError = Schema.Union([
   WorkspaceFileSystemOperationError,
   WorkspaceFilePathEscapeError,
@@ -129,6 +169,37 @@ export class WorkspaceFileSystem extends Context.Service<
     ) => Effect.Effect<
       ProjectWriteFileResult,
       | WorkspaceFileSystemError
+      | WorkspacePaths.WorkspacePathOutsideRootError
+      | KnownWorkspaces.UnknownWorkspaceError
+    >;
+    /** T3 Zip: creates a file or folder inside a known workspace, never replacing an entry. */
+    readonly createEntry: (
+      input: ProjectCreateEntryInput,
+    ) => Effect.Effect<
+      ProjectCreateEntryResult,
+      | WorkspaceFileSystemError
+      | WorkspaceEntryExistsError
+      | WorkspacePaths.WorkspacePathOutsideRootError
+      | KnownWorkspaces.UnknownWorkspaceError
+    >;
+    /** T3 Zip: renames an entry inside a known workspace, never replacing another entry. */
+    readonly renameEntry: (
+      input: ProjectRenameEntryInput,
+    ) => Effect.Effect<
+      ProjectEntryResult,
+      | WorkspaceFileSystemError
+      | WorkspaceEntryExistsError
+      | WorkspaceEntryChangeError
+      | WorkspacePaths.WorkspacePathOutsideRootError
+      | KnownWorkspaces.UnknownWorkspaceError
+    >;
+    /** T3 Zip: moves an entry to the Trash, or deletes it permanently. */
+    readonly deleteEntry: (
+      input: ProjectDeleteEntryInput,
+    ) => Effect.Effect<
+      ProjectEntryResult,
+      | WorkspaceFileSystemError
+      | WorkspaceEntryChangeError
       | WorkspacePaths.WorkspacePathOutsideRootError
       | KnownWorkspaces.UnknownWorkspaceError
     >;
@@ -504,7 +575,7 @@ export const make = Effect.gen(function* () {
 
   // Resolve existing ancestors and reject dangling links so creation cannot follow symlinks outside root.
   const resolveWriteTarget = Effect.fn("WorkspaceFileSystem.resolveWriteTarget")(function* (
-    input: ProjectWriteFileInput,
+    input: Pick<ProjectWriteFileInput, "cwd" | "relativePath">,
   ) {
     const target = yield* workspacePaths.resolveRelativePathWithinRoot({
       workspaceRoot: input.cwd,
@@ -581,7 +652,12 @@ export const make = Effect.gen(function* () {
         resolvedPath: realTargetPath,
       });
     }
-    return { relativePath: target.relativePath, realTargetPath };
+    return {
+      relativePath: target.relativePath,
+      realTargetPath,
+      realWorkspaceRoot,
+      namedTargetPath,
+    };
   });
 
   const writeFile: WorkspaceFileSystem["Service"]["writeFile"] = Effect.fn(
@@ -642,7 +718,261 @@ export const make = Effect.gen(function* () {
     return { relativePath: target.relativePath };
   });
 
-  return WorkspaceFileSystem.of({ getMetadata, readFile, writeFile });
+  // T3 Zip: create-only files and folders. Same workspace and path checks as writeFile; the
+  // final open or mkdir is exclusive, so an entry that appears after the checks is not replaced.
+  const createEntry: WorkspaceFileSystem["Service"]["createEntry"] = Effect.fn(
+    "WorkspaceFileSystem.createEntry",
+  )(function* (input) {
+    yield* knownWorkspaces.assertContains(input.cwd);
+    const target = yield* resolveWriteTarget(input);
+    const realTargetPath = target.realTargetPath;
+    const operationError = (
+      operation: "make-directory" | "write-file",
+      operationPath: string,
+      cause: unknown,
+    ) =>
+      (cause as NodeJS.ErrnoException).code === "EEXIST"
+        ? new WorkspaceEntryExistsError({
+            workspaceRoot: input.cwd,
+            relativePath: input.relativePath,
+            resolvedPath: realTargetPath,
+          })
+        : new WorkspaceFileSystemOperationError({
+            workspaceRoot: input.cwd,
+            relativePath: input.relativePath,
+            resolvedPath: realTargetPath,
+            operationPath,
+            operation,
+            cause,
+          });
+    const parentPath = path.dirname(realTargetPath);
+    yield* Effect.tryPromise({
+      try: () => NodeFSP.mkdir(parentPath, { recursive: true }),
+      catch: (cause) =>
+        new WorkspaceFileSystemOperationError({
+          workspaceRoot: input.cwd,
+          relativePath: input.relativePath,
+          resolvedPath: realTargetPath,
+          operationPath: parentPath,
+          operation: "make-directory",
+          cause,
+        }),
+    });
+    if (input.kind === "directory") {
+      yield* Effect.tryPromise({
+        try: () => NodeFSP.mkdir(realTargetPath),
+        catch: (cause) => operationError("make-directory", realTargetPath, cause),
+      });
+    } else {
+      yield* Effect.tryPromise({
+        // O_EXCL fails on any existing entry, a symlink included. Windows lacks O_NOFOLLOW.
+        try: () =>
+          NodeFSP.writeFile(realTargetPath, input.contents ?? "", {
+            flag:
+              NodeFS.constants.O_WRONLY |
+              NodeFS.constants.O_CREAT |
+              NodeFS.constants.O_EXCL |
+              (NodeFS.constants.O_NOFOLLOW ?? 0),
+          }),
+        catch: (cause) => operationError("write-file", realTargetPath, cause),
+      });
+    }
+    yield* workspaceEntries.refresh(input.cwd);
+    return { relativePath: target.relativePath };
+  });
+
+  // T3 Zip: the entry itself, not what a final symlink points to. The parent is resolved, the
+  // last name is kept, so renaming or deleting a link changes the link only.
+  const resolveEntryTarget = Effect.fn("WorkspaceFileSystem.resolveEntryTarget")(function* (
+    input: Pick<ProjectWriteFileInput, "cwd" | "relativePath">,
+  ) {
+    const target = yield* resolveWriteTarget(input);
+    const entryPath = yield* Effect.tryPromise({
+      try: async () =>
+        path.join(
+          await NodeFSP.realpath(path.dirname(target.namedTargetPath)),
+          path.basename(target.namedTargetPath),
+        ),
+      catch: (cause) =>
+        new WorkspaceFileSystemOperationError({
+          workspaceRoot: input.cwd,
+          relativePath: input.relativePath,
+          resolvedPath: target.realTargetPath,
+          operationPath: path.dirname(target.namedTargetPath),
+          operation: "realpath-target",
+          cause,
+        }),
+    });
+    if (
+      entryPath === target.realWorkspaceRoot ||
+      !isInsideRealRoot(target.realWorkspaceRoot, entryPath) ||
+      (yield* Effect.promise(() => isInGitFolder(entryPath).catch(() => true)))
+    ) {
+      return yield* new WorkspaceFilePathEscapeError({
+        workspaceRoot: input.cwd,
+        relativePath: input.relativePath,
+        resolvedWorkspaceRoot: target.realWorkspaceRoot,
+        resolvedPath: entryPath,
+      });
+    }
+    return { relativePath: target.relativePath, entryPath };
+  });
+
+  const entryChangeError =
+    (
+      input: Pick<ProjectWriteFileInput, "cwd" | "relativePath">,
+      operation: WorkspaceEntryChangeError["operation"],
+      operationPath: string,
+    ) =>
+    (cause: unknown) =>
+      new WorkspaceEntryChangeError({
+        workspaceRoot: input.cwd,
+        relativePath: input.relativePath,
+        operationPath,
+        operation,
+        cause,
+      });
+
+  const lstatOrNull = (entryPath: string) =>
+    NodeFSP.lstat(entryPath).catch((error: NodeJS.ErrnoException) => {
+      if (error.code === "ENOENT") return null;
+      throw error;
+    });
+
+  // T3 Zip: renames never replace an entry. A regular file is hard-linked to the new name, which
+  // fails with EEXIST atomically, then the old name is unlinked. Folders and symlinks cannot be
+  // hard-linked, so they are checked and then renamed; in that window rename(2) can replace only
+  // an empty folder, since it refuses a non-empty folder or a file in place of a folder.
+  const renameEntry: WorkspaceFileSystem["Service"]["renameEntry"] = Effect.fn(
+    "WorkspaceFileSystem.renameEntry",
+  )(function* (input) {
+    yield* knownWorkspaces.assertContains(input.cwd);
+    const source = yield* resolveEntryTarget(input);
+    const destinationInput = { cwd: input.cwd, relativePath: input.newRelativePath };
+    const destination = yield* resolveEntryTarget(destinationInput);
+    const from = source.entryPath;
+    const to = destination.entryPath;
+    const exists = () =>
+      new WorkspaceEntryExistsError({
+        workspaceRoot: input.cwd,
+        relativePath: input.newRelativePath,
+        resolvedPath: to,
+      });
+    const sourceStat = yield* Effect.tryPromise({
+      try: () => NodeFSP.lstat(from),
+      catch: entryChangeError(input, "lstat", from),
+    });
+    const destinationStat = yield* Effect.tryPromise({
+      try: () => lstatOrNull(to),
+      catch: entryChangeError(destinationInput, "lstat", to),
+    });
+    // A case-only rename on a case-insensitive volume finds the source itself at the new name.
+    const sameEntry =
+      destinationStat !== null &&
+      destinationStat.ino === sourceStat.ino &&
+      destinationStat.dev === sourceStat.dev;
+    if (destinationStat !== null && !sameEntry) return yield* exists();
+
+    const rename = Effect.tryPromise({
+      try: () => NodeFSP.rename(from, to),
+      catch: entryChangeError(input, "rename", from),
+    });
+    if (sameEntry || !sourceStat.isFile()) {
+      yield* rename;
+    } else {
+      const linked = yield* Effect.tryPromise({
+        try: () =>
+          NodeFSP.link(from, to).then(
+            () => true,
+            (error: NodeJS.ErrnoException) => {
+              // Volumes without hard links fall back to the checked rename above.
+              if (error.code === "EPERM" || error.code === "ENOTSUP" || error.code === "EXDEV") {
+                return false;
+              }
+              throw error;
+            },
+          ),
+        catch: (cause) =>
+          (cause as NodeJS.ErrnoException).code === "EEXIST"
+            ? exists()
+            : entryChangeError(input, "rename", from)(cause),
+      });
+      if (linked) {
+        yield* Effect.tryPromise({
+          try: () => NodeFSP.unlink(from),
+          catch: entryChangeError(input, "remove", from),
+        });
+      } else {
+        yield* rename;
+      }
+    }
+    yield* workspaceEntries.refresh(input.cwd);
+    return { relativePath: destination.relativePath };
+  });
+
+  const deleteEntry: WorkspaceFileSystem["Service"]["deleteEntry"] = Effect.fn(
+    "WorkspaceFileSystem.deleteEntry",
+  )(function* (input) {
+    yield* knownWorkspaces.assertContains(input.cwd);
+    const target = yield* resolveEntryTarget(input);
+    const entryPath = target.entryPath;
+    yield* Effect.tryPromise({
+      try: () => NodeFSP.lstat(entryPath),
+      catch: entryChangeError(input, "lstat", entryPath),
+    });
+    if (input.mode === "trash") {
+      // macOS 15 and later ship /usr/bin/trash. Without it the delete fails rather than
+      // silently becoming permanent.
+      if ((yield* HostProcess.Platform) !== "darwin") {
+        return yield* new WorkspaceEntryChangeError({
+          workspaceRoot: input.cwd,
+          relativePath: input.relativePath,
+          operationPath: entryPath,
+          operation: "trash",
+          trashUnavailable: true,
+        });
+      }
+      yield* Effect.tryPromise({
+        try: () =>
+          new Promise<void>((resolve, reject) => {
+            NodeChildProcess.execFile(
+              "/usr/bin/trash",
+              ["-s", entryPath],
+              { timeout: 30_000 },
+              (error) => (error ? reject(error) : resolve()),
+            );
+          }),
+        catch: (cause) =>
+          new WorkspaceEntryChangeError({
+            workspaceRoot: input.cwd,
+            relativePath: input.relativePath,
+            operationPath: entryPath,
+            operation: "trash",
+            ...((cause as NodeJS.ErrnoException).code === "ENOENT"
+              ? { trashUnavailable: true }
+              : {}),
+            cause,
+          }),
+      });
+    } else {
+      yield* Effect.tryPromise({
+        // rm removes a symlink itself, never what it points to.
+        try: () => NodeFSP.rm(entryPath, { recursive: true }),
+        catch: entryChangeError(input, "remove", entryPath),
+      });
+    }
+    yield* workspaceEntries.refresh(input.cwd);
+    return { relativePath: target.relativePath };
+  });
+
+  return WorkspaceFileSystem.of({
+    getMetadata,
+    readFile,
+    writeFile,
+    createEntry,
+    renameEntry,
+    deleteEntry,
+  });
 });
 
 export const layer = Layer.effect(WorkspaceFileSystem, make);

@@ -61,7 +61,7 @@ function optimisticProjectFileKey(target: OptimisticProjectFileTarget): string {
 }
 
 function writtenFilePaths(
-  input: EnvironmentRpcInput<typeof WS_METHODS.projectsWriteFile>,
+  input: Pick<EnvironmentRpcInput<typeof WS_METHODS.projectsWriteFile>, "cwd" | "relativePath">,
   result: EnvironmentRpcSuccess<typeof WS_METHODS.projectsWriteFile>,
 ) {
   return new Set(
@@ -242,6 +242,71 @@ export function createProjectEnvironmentAtoms<R, E>(
       },
       execute: (input) =>
         requestGuarded(WS_METHODS.projectsWriteFile, input).pipe(
+          Effect.tap((result) =>
+            Effect.forEach(writtenFilePaths(input, result), fileMetadata.invalidate),
+          ),
+        ),
+      onSuccess: ({ environmentId, input }, registry, result) =>
+        Effect.sync(() => {
+          for (const path of writtenFilePaths(input, result))
+            fileMetadata.refreshPath(environmentId, path, registry);
+        }),
+    }),
+    // T3 Zip: create-only files and folders for the Files panel.
+    createEntry: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:projects:create-entry",
+      tag: WS_METHODS.projectsCreateEntry,
+      scheduler: fileScheduler,
+      concurrency: {
+        mode: "serial",
+        key: ({ environmentId, input }) =>
+          JSON.stringify([environmentId, input.cwd, input.relativePath]),
+      },
+      execute: (input) =>
+        requestGuarded(WS_METHODS.projectsCreateEntry, input).pipe(
+          Effect.tap((result) =>
+            Effect.forEach(writtenFilePaths(input, result), fileMetadata.invalidate),
+          ),
+        ),
+      onSuccess: ({ environmentId, input }, registry, result) =>
+        Effect.sync(() => {
+          for (const path of writtenFilePaths(input, result))
+            fileMetadata.refreshPath(environmentId, path, registry);
+        }),
+    }),
+    // T3 Zip: rename and delete for the Files panel; both paths' metadata is refreshed.
+    renameEntry: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:projects:rename-entry",
+      tag: WS_METHODS.projectsRenameEntry,
+      scheduler: fileScheduler,
+      concurrency: {
+        mode: "serial",
+        key: ({ environmentId, input }) =>
+          JSON.stringify([environmentId, input.cwd, input.relativePath]),
+      },
+      execute: (input) =>
+        requestGuarded(WS_METHODS.projectsRenameEntry, input).pipe(
+          Effect.tap((result) =>
+            Effect.forEach(writtenFilePaths(input, result), fileMetadata.invalidate),
+          ),
+        ),
+      onSuccess: ({ environmentId, input }, registry, result) =>
+        Effect.sync(() => {
+          for (const path of writtenFilePaths(input, result))
+            fileMetadata.refreshPath(environmentId, path, registry);
+        }),
+    }),
+    deleteEntry: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:projects:delete-entry",
+      tag: WS_METHODS.projectsDeleteEntry,
+      scheduler: fileScheduler,
+      concurrency: {
+        mode: "serial",
+        key: ({ environmentId, input }) =>
+          JSON.stringify([environmentId, input.cwd, input.relativePath]),
+      },
+      execute: (input) =>
+        requestGuarded(WS_METHODS.projectsDeleteEntry, input).pipe(
           Effect.tap((result) =>
             Effect.forEach(writtenFilePaths(input, result), fileMetadata.invalidate),
           ),

@@ -4,6 +4,7 @@ import {
   buildProjectDrawerModel,
   editSharedProjectRail,
   effectiveProjectRail,
+  favoriteProjectDrawerItems,
   primaryProjectRail,
   projectsToBringBack,
   visibleProjectDrawerItems,
@@ -104,22 +105,39 @@ describe("project drawer rows", () => {
     ]);
   });
 
-  it("folds folders on this device and searches across folders", () => {
+  it("folds folders on this device", () => {
     const model = buildProjectDrawerModel({
       rows: { fixed, recent },
       rail: rail(),
       collapsedFolders: new Set(["work"]),
       nowMs: NOW_MS,
     });
-    const keys = (query: string) =>
-      visibleProjectDrawerItems(model.items, query).map((item) =>
+    expect(
+      visibleProjectDrawerItems(model.items).map((item) =>
         item.kind === "folder" ? `[${item.name}]` : item.row.key,
-      );
-    expect(keys("")).toEqual(["a", "[Work]", "d", "e"]);
-    // A match inside a folded folder shows, under its folder's name.
-    expect(keys("C")).toEqual(["[Work]", "c"]);
-    expect(keys("d")).toEqual(["d"]);
-    expect(keys("zzz")).toEqual([]);
+      ),
+    ).toEqual(["a", "[Work]", "d", "e"]);
+  });
+
+  it("lists only favorites in rail order, folded folders included", () => {
+    const model = buildProjectDrawerModel({
+      rows: { fixed, recent },
+      rail: rail({ favoriteProjects: ["d", "c", "missing"] }),
+      collapsedFolders: new Set(["work"]),
+      nowMs: NOW_MS,
+    });
+    const favorites = favoriteProjectDrawerItems(model.items);
+    expect(
+      visibleProjectDrawerItems(favorites).map((item) =>
+        item.kind === "folder" ? `[${item.name}]` : item.row.key,
+      ),
+    ).toEqual(["c", "d"]);
+    expect(favorites.every((item) => !item.canMoveUp && !item.canMoveDown)).toBe(true);
+    // Each favorite keeps its folder for its menu.
+    expect(favorites.map((item) => item.kind === "project" && item.folderId)).toEqual([
+      "work",
+      null,
+    ]);
   });
 
   it("keeps recent order with no layout actions when the server has no shared rail", () => {
@@ -274,6 +292,16 @@ describe("project drawer writes", () => {
       { kind: "show", projectKey: "a" },
       { kind: "wake", projectKey: "a" },
     ]);
+  });
+
+  it("shows a project that is only hidden and wakes one that is only snoozed", () => {
+    const current = rail({
+      hiddenProjects: ["b"],
+      snoozedProjects: { d: "2026-11-23T00:00:00.000Z" },
+    });
+    expect(projectsToBringBack(current, ["b"])).toEqual([{ kind: "show", projectKey: "b" }]);
+    expect(projectsToBringBack(current, ["d"])).toEqual([{ kind: "wake", projectKey: "d" }]);
+    expect(projectsToBringBack(current, ["a"])).toEqual([]);
   });
 });
 

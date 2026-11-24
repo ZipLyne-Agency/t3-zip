@@ -20,6 +20,8 @@ import {
   ProjectWriteFileError,
   ProjectWriteFileInput,
   ProjectWriteFileResult,
+  ProjectCreateEntryError,
+  ProjectCreateEntryInput,
 } from "./project.ts";
 
 const decodeProjectCreatePayload = Schema.decodeUnknownSync(ProjectCreatePayload);
@@ -27,6 +29,36 @@ const decodeProjectUpdatePayload = Schema.decodeUnknownSync(ProjectUpdatePayload
 const decodeProjectMutation = Schema.decodeUnknownSync(ProjectMutation);
 
 describe("project RPC errors", () => {
+  // T3 Zip: the Files panel shows its own "name taken" text only when this flag arrives.
+  it("keeps the create-entry already-exists flag across the wire", () => {
+    const roundTrip = <S extends Schema.Codec<unknown, unknown>>(schema: S, value: S["Type"]) =>
+      Schema.decodeUnknownSync(schema)(Schema.encodeSync(schema)(value));
+
+    const input = roundTrip(ProjectCreateEntryInput, {
+      cwd: "/workspace",
+      relativePath: "notes/Untitled.md",
+      kind: "file",
+      contents: "# Notes\n",
+    });
+    expect(input).toEqual({
+      cwd: "/workspace",
+      relativePath: "notes/Untitled.md",
+      kind: "file",
+      contents: "# Notes\n",
+    });
+    const error = roundTrip(
+      ProjectCreateEntryError,
+      new ProjectCreateEntryError({
+        cwd: "/workspace",
+        relativePath: "notes/Untitled.md",
+        alreadyExists: true,
+        message: "Workspace entry 'notes/Untitled.md' already exists in '/workspace'.",
+      }),
+    );
+    expect(error).toBeInstanceOf(ProjectCreateEntryError);
+    expect(error.alreadyExists).toBe(true);
+  });
+
   it("keeps whitespace in file paths across the wire", () => {
     const roundTrip = <S extends Schema.Codec<unknown, unknown>>(schema: S, value: S["Type"]) =>
       Schema.decodeUnknownSync(schema)(Schema.encodeSync(schema)(value));

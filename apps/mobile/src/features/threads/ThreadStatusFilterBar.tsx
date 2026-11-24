@@ -1,16 +1,17 @@
+import type { EnvironmentProject } from "@t3tools/client-runtime/state/shell";
 import type { ThreadStatusFilterCounts } from "@t3tools/client-runtime/state/thread-status-filter";
 import { useGT } from "gt-react-native";
 import { memo } from "react";
 import { Pressable, View } from "react-native";
 
+import { ProjectFavicon } from "../../components/ProjectFavicon";
+import { SymbolView } from "../../components/ui/AppSymbol";
 import { AppText } from "../../components/ui/AppText";
 import { cn } from "../../lib/cn";
 import type { ThreadListStatusFilter } from "../../persistence/mobile-preferences";
 
-const FILTERS: readonly ThreadListStatusFilter[] = ["all", "waiting", "working", "done"];
-
 /** Each filter's count takes its status color, as the rows' status labels do. */
-const COUNT_CLASS: Record<ThreadListStatusFilter, string> = {
+const COUNT_CLASS: Record<"all" | "waiting" | "working" | "done", string> = {
   all: "text-foreground",
   waiting: "text-warning-foreground",
   working: "text-adaptive-sky-600-400",
@@ -18,11 +19,13 @@ const COUNT_CLASS: Record<ThreadListStatusFilter, string> = {
 };
 
 /**
- * Four equal tiles above the thread list: All, Needs You, Working and Done, each with its count
- * over its label. Equal widths and a fixed count line keep the bar still as counts change, and
- * a label at a large text size shrinks to fit instead of cutting off.
+ * Equal tiles above the thread list, each with its count over its label: All, Waiting, Working
+ * and Done, or for one project All, Waiting and Working · Done with both counts. Equal widths
+ * and a fixed count line keep the bar still as counts change, and a label at a large text size
+ * shrinks to fit instead of cutting off.
  */
 export const ThreadStatusFilterBar = memo(function ThreadStatusFilterBar(props: {
+  readonly filters: ReadonlyArray<ThreadListStatusFilter>;
   readonly selected: ThreadListStatusFilter;
   readonly counts: ThreadStatusFilterCounts;
   /** Open threads in scope, the All tile's count. */
@@ -41,10 +44,27 @@ export const ThreadStatusFilterBar = memo(function ThreadStatusFilterBar(props: 
         return gt("Working", { $context: "thread list filter: running threads" });
       case "done":
         return gt("Done", { $context: "thread list filter: finished threads" });
+      case "workingDone":
+        return gt("Working · Done", {
+          $context: "thread list filter: running and finished threads together, for one project",
+        });
     }
   };
-  const count = (filter: ThreadListStatusFilter) =>
+  const count = (filter: "all" | "waiting" | "working" | "done") =>
     filter === "all" ? props.openCount : props.counts[filter];
+  const countText = (filter: "all" | "waiting" | "working" | "done", selected: boolean) => {
+    const value = count(filter);
+    return (
+      <AppText
+        className={cn(
+          "font-t3-bold",
+          value === 0 && !selected ? "text-foreground-tertiary" : COUNT_CLASS[filter],
+        )}
+      >
+        {value}
+      </AppText>
+    );
+  };
   const sidebar = props.pane === "sidebar";
   return (
     <View
@@ -54,19 +74,25 @@ export const ThreadStatusFilterBar = memo(function ThreadStatusFilterBar(props: 
         sidebar ? "mx-2 mb-2 mt-1 bg-adaptive-neutral-950-a5-white-a5" : "mx-5 mb-3 bg-subtle",
       )}
     >
-      {FILTERS.map((filter) => {
+      {props.filters.map((filter) => {
         const selected = props.selected === filter;
-        const value = count(filter);
         const name = label(filter);
         return (
           <Pressable
             key={filter}
             accessibilityRole="tab"
             accessibilityState={{ selected }}
-            accessibilityLabel={gt("{name}, {count, plural, one {# thread} other {# threads}}", {
-              name,
-              count: value,
-            })}
+            accessibilityLabel={
+              filter === "workingDone"
+                ? gt("Working: {working}, Done: {done}", {
+                    working: props.counts.working,
+                    done: props.counts.done,
+                  })
+                : gt("{name}, {count, plural, one {# thread} other {# threads}}", {
+                    name,
+                    count: count(filter),
+                  })
+            }
             onPress={() => props.onSelect(filter)}
             className={cn(
               "min-h-[52px] flex-1 items-center justify-center rounded-xl border px-1 py-1.5 active:opacity-70",
@@ -77,13 +103,17 @@ export const ThreadStatusFilterBar = memo(function ThreadStatusFilterBar(props: 
             <AppText
               textRole="headline"
               numberOfLines={1}
-              className={cn(
-                "font-t3-bold",
-                value === 0 && !selected ? "text-foreground-tertiary" : COUNT_CLASS[filter],
-              )}
               style={{ fontVariant: ["tabular-nums"] }}
             >
-              {value}
+              {filter === "workingDone" ? (
+                <>
+                  {countText("working", selected)}
+                  <AppText className="text-foreground-tertiary">{" · "}</AppText>
+                  {countText("done", selected)}
+                </>
+              ) : (
+                countText(filter, selected)
+              )}
             </AppText>
             <AppText
               textRole="caption"
@@ -165,6 +195,66 @@ export const ThreadStatusSectionHeader = memo(function ThreadStatusSectionHeader
           </AppText>
         </Pressable>
       ) : null}
+    </View>
+  );
+});
+
+const PROJECT_ICON_SIZE = 16;
+
+/** A project's name and thread count over its threads inside a Done heading, as on desktop. */
+export const ThreadStatusProjectHeader = memo(function ThreadStatusProjectHeader(props: {
+  readonly title: string | null;
+  readonly project: EnvironmentProject | null;
+  readonly scratch: boolean;
+  readonly count: number;
+  readonly pane?: "screen" | "sidebar";
+}) {
+  const gt = useGT();
+  const sidebar = props.pane === "sidebar";
+  const title = props.title ?? gt("Unknown Project");
+  const { project } = props;
+  return (
+    <View
+      accessible
+      accessibilityRole="header"
+      accessibilityLabel={gt("{title}, {count, plural, one {# thread} other {# threads}}", {
+        title,
+        count: props.count,
+      })}
+      className={cn("mt-2 min-h-[28px] flex-row items-center gap-2", sidebar ? "px-3" : "px-5")}
+    >
+      {project && !props.scratch ? (
+        <ProjectFavicon
+          environmentId={project.environmentId}
+          faviconPath={project.faviconPath}
+          projectIcon={project.projectIcon}
+          size={PROJECT_ICON_SIZE}
+          projectTitle={project.title}
+          workspaceRoot={project.workspaceRoot}
+        />
+      ) : (
+        <View
+          className="items-center justify-center rounded bg-subtle-strong"
+          style={{ width: PROJECT_ICON_SIZE, height: PROJECT_ICON_SIZE }}
+        >
+          <SymbolView name="circle.dashed" size={11} tintColorClassName="accent-foreground-muted" />
+        </View>
+      )}
+      <AppText
+        numberOfLines={1}
+        className={cn(
+          "shrink text-[13px] font-t3-medium",
+          sidebar ? "text-drawer-foreground" : "text-foreground-secondary",
+        )}
+      >
+        {title}
+      </AppText>
+      <AppText
+        className="text-xs font-t3-medium text-foreground-tertiary"
+        style={{ fontVariant: ["tabular-nums"] }}
+      >
+        {props.count}
+      </AppText>
     </View>
   );
 });

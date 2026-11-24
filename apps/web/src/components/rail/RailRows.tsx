@@ -935,3 +935,65 @@ export function RailAllProjectsRow(props: {
     </button>
   );
 }
+
+// Highlighting a result by key or late rows keeps it in view, as the thread results do.
+const scrollHighlightedResultIntoView = (node: HTMLLIElement | null) => {
+  node?.scrollIntoView({ block: "nearest" });
+};
+
+/**
+ * A project in the rail's search results: the rail row's icon, name, star and counts. A hidden
+ * or snoozed project says so on its second line, so it is clear why the rail does not list it.
+ */
+export function RailSearchProjectRow(props: {
+  project: RailProject;
+  favorite: boolean;
+  /** "Hidden" or "Snoozed until …"; null for a project in the rail. */
+  awayLabel: string | null;
+  resultId: string;
+  highlighted: boolean;
+  selected: boolean;
+  onHighlight: () => void;
+  onSelect: () => void;
+}) {
+  const { project } = props;
+  return (
+    <li
+      ref={props.highlighted ? scrollHighlightedResultIntoView : undefined}
+      role="presentation"
+      className="list-none"
+    >
+      <button
+        id={props.resultId}
+        type="button"
+        role="option"
+        tabIndex={-1}
+        aria-selected={props.highlighted}
+        aria-current={props.selected ? "true" : undefined}
+        onMouseMove={props.onHighlight}
+        // Focus stays in the search box, as for the thread results.
+        onPointerDown={(event) => event.preventDefault()}
+        onClick={props.onSelect}
+        className={cn(
+          railRowClassName(props.highlighted || props.selected, 2),
+          "pl-(--sidebar-row-content-inset)",
+        )}
+      >
+        <ProjectFavicon project={project.group} className="size-4 shrink-0" />
+        <RailRowText
+          name={project.group.displayName}
+          detail={props.awayLabel ?? project.detail}
+          counts={props.awayLabel === null ? project.counts : null}
+          favorite={props.favorite}
+        />
+        <span className="flex shrink-0 items-center gap-1.5">
+          <RailStats
+            counts={project.counts}
+            topStatus={project.topStatus}
+            running={project.running}
+          />
+        </span>
+      </button>
+    </li>
+  );
+}

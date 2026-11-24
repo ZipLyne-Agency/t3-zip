@@ -1,11 +1,13 @@
 import { EnvironmentId, type ProjectEntry } from "@t3tools/contracts";
+import * as AsyncResult from "effect/reactivity/AsyncResult";
 import { describe, expect, it, vi } from "vite-plus/test";
 import { page, userEvent } from "vite-plus/test/browser";
 
 import { COMPOSER_MENTION_DRAG_TYPE } from "~/components/chat/composerMentionDrag";
+import { RightPanelSheet } from "~/components/RightPanelSheet";
 import { dismissContextMenu } from "~/contextMenuFallback";
 import { isMacPlatform } from "~/lib/utils";
-import { render } from "../../../test/render";
+import { act, render } from "../../../test/render";
 import FileBrowserPanel from "./FileBrowserPanel";
 import { dispatchPreviewAction } from "../preview/previewActionBus";
 import { writeExpandedDirectories } from "./fileTreeExpansion";
@@ -46,6 +48,18 @@ vi.mock("~/fileContextMenu", () => ({
   useFileContextMenu: () => ({ buildItems: () => [], activate: () => Promise.resolve() }),
 }));
 vi.mock("~/hooks/useWorkspaceMutationRefresh", () => ({ useWorkspaceMutationRefresh: () => {} }));
+// T3 Zip: write access and the create, rename and delete commands for the Files panel actions.
+const files = vi.hoisted(() => ({
+  writable: false,
+  run: (_call: unknown): Promise<unknown> => Promise.resolve(null),
+}));
+vi.mock("~/state/session", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("~/state/session")>()),
+  useEnvironmentScope: () => files.writable,
+}));
+vi.mock("~/state/use-atom-command", () => ({
+  useAtomCommand: () => (call: unknown) => files.run(call),
+}));
 
 function findTreeRow(path: string): HTMLElement | null {
   for (const host of document.querySelectorAll("*")) {
@@ -162,6 +176,10 @@ describe("FileBrowserPanel", () => {
 
     row.click();
     await vi.waitFor(() => expect(onOpenFile).toHaveBeenCalledTimes(1));
+
+    // The selection stays put, so reopening the selected file must not depend on a selection change.
+    row.click();
+    await vi.waitFor(() => expect(onOpenFile).toHaveBeenCalledTimes(2));
   });
 
   it("keeps an expanded folder open when a very large listing rebuilds the tree", async () => {
@@ -293,6 +311,47 @@ describe("FileBrowserPanel", () => {
     await expect.element(search).toHaveFocus();
   });
 
+  it("Escape in the file search clears it without closing the panel sheet", async () => {
+    const onCloseSheet = vi.fn();
+    await using _screen = await render(
+      <RightPanelSheet animationDurationMs={0} open onClose={onCloseSheet}>
+        <FileBrowserPanel
+          environmentId={EnvironmentId.make("env-files")}
+          cwd="/repo"
+          projectName="repo"
+          selectedPath={null}
+          selectedPathRevealId={0}
+          onOpenFile={() => {}}
+          workspaceMutationId={null}
+        />
+      </RightPanelSheet>,
+    );
+    const search = page.getByRole("searchbox", { name: "Search repo files" });
+    await userEvent.fill(search, "read");
+    for (const composition of [
+      { key: "Escape", isComposing: true, keyCode: 27 },
+      { key: "Escape", isComposing: false, keyCode: 229 },
+    ]) {
+      // Safari ends the composition just before the Escape keydown.
+      await act(() => {
+        search.element().dispatchEvent(new CompositionEvent("compositionend", { bubbles: true }));
+        search
+          .element()
+          .dispatchEvent(new KeyboardEvent("keydown", { ...composition, bubbles: true }));
+      });
+      await expect.element(search).toHaveValue("read");
+    }
+    expect(search.element().getAttribute("type")).toBe("text");
+
+    await userEvent.keyboard("{Escape}");
+    await expect.element(search).toHaveValue("");
+    expect(onCloseSheet).not.toHaveBeenCalled();
+
+    (search.element() as HTMLElement).focus();
+    await userEvent.keyboard("{Escape}");
+    await vi.waitFor(() => expect(onCloseSheet).toHaveBeenCalledOnce());
+  });
+
   it("keeps expanded folders when the panel remounts", async () => {
     const panel = () => (
       <FileBrowserPanel
@@ -379,6 +438,137 @@ describe("FileBrowserPanel", () => {
       await vi.waitFor(() => expect(scroller.scrollHeight).toBeGreaterThan(60 * 24));
 
       expect(scroller.scrollTop).toBe(0);
+    });
+  });
+
+  describe("rename and delete", () => {
+    function withWriteAccess(run: (call: { input: Record<string, string> }) => unknown) {
+      files.writable = true;
+      const spy = vi.fn(async (call: { input: Record<string, string> }) => run(call));
+      files.run = (call) => spy(call as { input: Record<string, string> });
+      return {
+        run: spy,
+        [Symbol.dispose]: () => {
+          files.writable = false;
+          dismissContextMenu();
+        },
+      };
+    }
+
+    function renameBox(): HTMLInputElement | null {
+      for (const host of document.querySelectorAll("*")) {
+        const box = host.shadowRoot?.querySelector<HTMLInputElement>("[data-item-rename-input]");
+        if (box) return box;
+      }
+      return null;
+    }
+
+    async function chooseRowAction(path: string, action: string) {
+      await vi.waitFor(() => expect(findTreeRow(path)).not.toBeNull());
+      findTreeRow(path)!.dispatchEvent(
+        new MouseEvent("contextmenu", {
+          bubbles: true,
+          cancelable: true,
+          composed: true,
+          button: 2,
+        }),
+      );
+      const item = page.getByRole("menuitem", { name: action, exact: true });
+      await expect.element(item).toBeVisible();
+      await userEvent.click(item);
+    }
+
+    function renderPanel(onEntryChanged: (change: unknown) => void) {
+      return render(
+        <FileBrowserPanel
+          environmentId={EnvironmentId.make("env-files")}
+          cwd="/repo"
+          projectName="repo"
+          selectedPath={null}
+          selectedPathRevealId={0}
+          onOpenFile={() => {}}
+          workspaceMutationId={null}
+          onEntryChanged={onEntryChanged}
+        />,
+      );
+    }
+
+    it("renames a file in place on Return, with the name selected up to its extension", async () => {
+      using access = withWriteAccess(({ input }) =>
+        AsyncResult.success({ relativePath: input.newRelativePath }),
+      );
+      const onEntryChanged = vi.fn();
+      await using _screen = await renderPanel(onEntryChanged);
+
+      await chooseRowAction("README.md", "Rename");
+      await vi.waitFor(() => expect(renameBox()?.value).toBe("README.md"));
+      const box = renameBox()!;
+      await vi.waitFor(() => expect([box.selectionStart, box.selectionEnd]).toEqual([0, 6]));
+      await userEvent.keyboard("NOTES{Enter}");
+
+      await vi.waitFor(() =>
+        expect(onEntryChanged).toHaveBeenCalledWith({
+          type: "renamed",
+          from: "README.md",
+          to: "NOTES.md",
+        }),
+      );
+      expect(access.run).toHaveBeenCalledWith(
+        expect.objectContaining({
+          input: { cwd: "/repo", relativePath: "README.md", newRelativePath: "NOTES.md" },
+        }),
+      );
+      await vi.waitFor(() => expect(renameBox()).toBeNull());
+      expect(findTreeRow("NOTES.md")).not.toBeNull();
+    });
+
+    it("keeps the box open on a taken name, and Escape leaves the row as it was", async () => {
+      using access = withWriteAccess(() =>
+        AsyncResult.fail({ _tag: "ProjectEntryChangeError", alreadyExists: true, message: "x" }),
+      );
+      await using _screen = await renderPanel(() => {});
+
+      await chooseRowAction("README.md", "Rename");
+      await vi.waitFor(() => expect(renameBox()?.value).toBe("README.md"));
+      await userEvent.keyboard("src.md{Enter}");
+      await expect.element(page.getByRole("alert")).toHaveTextContent("That name is taken");
+      expect(renameBox()?.value).toBe("src.md.md");
+
+      await userEvent.keyboard("{Escape}");
+      await vi.waitFor(() => expect(renameBox()).toBeNull());
+      expect(findTreeRow("README.md")).not.toBeNull();
+      expect(access.run).toHaveBeenCalledTimes(1);
+    });
+
+    it("deletes after confirming, permanently when the server is not this Mac", async () => {
+      using access = withWriteAccess(({ input }) =>
+        AsyncResult.success({ relativePath: input.relativePath }),
+      );
+      const onEntryChanged = vi.fn();
+      await using _screen = await renderPanel(onEntryChanged);
+
+      await chooseRowAction("README.md", "Delete");
+      await expect.element(page.getByText("Delete README.md?")).toBeVisible();
+      await expect
+        .element(page.getByText("It is deleted permanently. This can't be undone."))
+        .toBeVisible();
+      expect(access.run).not.toHaveBeenCalled();
+      // Cancel is the default; the delete button comes next. The dialog is driven by keyboard, as in
+      // dialog.browser.test.tsx, since Base UI's modal layer intercepts the test pointer.
+      await expect.element(page.getByRole("button", { name: "Cancel", exact: true })).toHaveFocus();
+      await userEvent.keyboard("{Tab}");
+      await expect.element(page.getByRole("button", { name: "Delete Permanently" })).toHaveFocus();
+      await userEvent.keyboard("{Enter}");
+
+      await vi.waitFor(() =>
+        expect(onEntryChanged).toHaveBeenCalledWith({ type: "deleted", path: "README.md" }),
+      );
+      expect(access.run).toHaveBeenCalledWith(
+        expect.objectContaining({
+          input: { cwd: "/repo", relativePath: "README.md", mode: "permanent" },
+        }),
+      );
+      await vi.waitFor(() => expect(findTreeRow("README.md")).toBeNull());
     });
   });
 });

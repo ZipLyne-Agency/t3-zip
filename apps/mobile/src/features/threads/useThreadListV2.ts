@@ -21,8 +21,9 @@ import type {
 } from "../../persistence/mobile-preferences";
 import {
   buildThreadStatusEntries,
-  buildThreadStatusListItems,
+  buildThreadStatusFilterRows,
   countThreadStatusEntries,
+  type ThreadStatusProjectGroup,
 } from "./threadStatusFilterList";
 
 /**
@@ -60,6 +61,8 @@ export function useThreadListV2(input: {
   readonly pendingTasks: ReadonlyArray<PendingNewTask>;
   readonly environmentId: EnvironmentId | null;
   readonly projectRefs: LayoutInput["projectRefs"];
+  /** Each project's group; with every project shown, Done lists its threads by project. */
+  readonly statusProjectGroups?: ReadonlyMap<string, ThreadStatusProjectGroup>;
   readonly searchQuery: string;
   /** Threads that match the search by content, keyed like `threadSearchMatchKey`. */
   readonly searchMatches: ReadonlyMap<string, unknown>;
@@ -303,12 +306,15 @@ export function useThreadListV2(input: {
   const statusCounts = useMemo(() => countThreadStatusEntries(statusEntries), [statusEntries]);
   const statusFilter = input.statusFilter ?? "all";
   const searching = input.searchQuery.trim().length > 0;
-  const filteredItems = useMemo(() => {
+  const statusProjectGroups =
+    input.projectRefs == null ? (input.statusProjectGroups ?? null) : null;
+  const filteredRows = useMemo(() => {
     if (statusFilter === "all" || searching) return null;
-    const rows = buildThreadStatusListItems({
+    return buildThreadStatusFilterRows({
       entries: statusEntries,
       filter: statusFilter,
       now: layoutTime,
+      projectGroups: statusProjectGroups,
       decorate: (listed) =>
         buildThreadListV2ListItems({
           items: listed,
@@ -319,20 +325,15 @@ export function useThreadListV2(input: {
           queuedThreadKeys: input.queuedThreadKeys,
           resolve: keepMarked,
         }),
+      pendingRows: () =>
+        buildThreadListV2ListItems({ items: [], pendingTasks, resolve: keepMarked }),
     });
-    // A new task is about to run, so it lists under Working too.
-    if (statusFilter !== "working") return rows;
-    const pendingRows = buildThreadListV2ListItems({
-      items: [],
-      pendingTasks,
-      resolve: keepMarked,
-    });
-    return [...pendingRows, ...rows];
   }, [
     statusFilter,
     searching,
     statusEntries,
     layoutTime,
+    statusProjectGroups,
     input.now,
     input.snoozeEnvironmentIds,
     input.muteEnvironmentIds,
@@ -341,7 +342,9 @@ export function useThreadListV2(input: {
   ]);
   return {
     layout,
-    items: filteredItems ?? items,
+    items: filteredRows?.items ?? items,
+    /** The combined Working and Done tab's two lists, Done above Working. */
+    splitItems: filteredRows?.split ?? null,
     contentOnlyThreadKeys,
     olderSettledShelf,
     statusEntries,

@@ -43,6 +43,8 @@ export function DrawerRow(props: {
   readonly selected: boolean;
   readonly nowMs: number;
   readonly favorite?: boolean;
+  /** A second line, such as why a search match is not in the list. */
+  readonly detail?: string;
   /** Projects in a folder sit one step in, under the folder's name. */
   readonly indented?: boolean;
   readonly onPress: () => void;
@@ -56,7 +58,11 @@ export function DrawerRow(props: {
     <RowPressable
       accessibilityRole="button"
       accessibilityState={{ selected: props.selected }}
-      accessibilityLabel={rowAccessibilityName(gt, row)}
+      accessibilityLabel={
+        props.detail === undefined
+          ? rowAccessibilityName(gt, row)
+          : `${rowAccessibilityName(gt, row)}, ${props.detail}`
+      }
       onPress={props.onPress}
       onTouchStart={props.onTouchStart}
       onLongPress={props.onLongPress}
@@ -67,21 +73,28 @@ export function DrawerRow(props: {
       )}
     >
       <RowIcon row={row} />
-      <View className="min-w-0 flex-1 flex-row items-center gap-1">
-        <AppText
-          textRole="body"
-          numberOfLines={1}
-          adjustsFontSizeToFit
-          minimumFontScale={0.8}
-          className="shrink font-t3-medium text-foreground"
-        >
-          {row.title}
-        </AppText>
-        {props.favorite ? (
-          <View accessibilityLabel={gt("Favorite")} accessible>
-            <SymbolView name="star.fill" size={11} tintColorClassName="accent-foreground-muted" />
-          </View>
-        ) : null}
+      <View className="min-w-0 flex-1">
+        <View className="flex-row items-center gap-1">
+          <AppText
+            textRole="body"
+            numberOfLines={1}
+            adjustsFontSizeToFit
+            minimumFontScale={0.8}
+            className="shrink font-t3-medium text-foreground"
+          >
+            {row.title}
+          </AppText>
+          {props.favorite ? (
+            <View accessibilityLabel={gt("Favorite")} accessible>
+              <SymbolView name="star.fill" size={11} tintColorClassName="accent-foreground-muted" />
+            </View>
+          ) : null}
+        </View>
+        {props.detail === undefined ? null : (
+          <AppText textRole="label" numberOfLines={1} className="text-foreground-muted">
+            {props.detail}
+          </AppText>
+        )}
       </View>
       <CountPill count={row.waitingCount} />
       <AppText
@@ -159,6 +172,8 @@ export function DrawerProjectRow(props: {
   readonly item: Extract<ProjectDrawerItem, { kind: "project" }>;
   readonly drawer: ProjectDrawerData;
   readonly selected: boolean;
+  /** Favorites Only lists projects without their folders, so none sits indented. */
+  readonly flat?: boolean;
   readonly onPick: () => void;
   /** New Thread leaves the drawer for the composer. */
   readonly onClose: () => void;
@@ -263,7 +278,7 @@ export function DrawerProjectRow(props: {
           selected={props.selected}
           nowMs={drawer.nowMs}
           favorite={item.favorite}
-          indented={item.folderId !== null}
+          indented={!props.flat && item.folderId !== null}
           onPress={props.onPick}
         />
       </Menu>
@@ -292,13 +307,11 @@ function promptFolderName(
 export function DrawerFolderRow(props: {
   readonly item: Extract<ProjectDrawerItem, { kind: "folder" }>;
   readonly drawer: ProjectDrawerData;
-  /** Search shows every match, so folders do not fold while it is on. */
-  readonly searching: boolean;
 }) {
   const gt = useGT();
   const m = useMessages();
   const { item, drawer } = props;
-  const expanded = props.searching || !item.collapsed;
+  const expanded = !item.collapsed;
   const handleAction = (event: string) => {
     const action = readFolderMenuEvent(event);
     if (action === null) return;
@@ -324,7 +337,6 @@ export function DrawerFolderRow(props: {
         "{name}, folder, {count, plural, one {# project} other {# projects}}",
         { name: item.name, count: item.projectCount },
       )}
-      disabled={props.searching}
       onPress={() => drawer.toggleFolder(item.folderId)}
       className="min-h-11 flex-row items-center gap-2 rounded-xl px-3"
     >

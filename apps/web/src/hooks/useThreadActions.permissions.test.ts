@@ -11,6 +11,7 @@ import { AsyncResult } from "effect/reactivity";
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { scopedThreadKey } from "@t3tools/client-runtime/environment";
+import { isAtomCommandInterrupted } from "@t3tools/client-runtime/state/runtime";
 import { useDiffPanelStore } from "../diffPanelStore";
 import { browserMiniPlayerSource, usePreviewMiniPlayerStore } from "../previewMiniPlayerStore";
 import { useRightPanelStore } from "../rightPanelStore";
@@ -49,6 +50,7 @@ const state = vi.hoisted(() => ({
   requests: [] as { action: string; environmentId: string; input: { threadId?: string } }[],
   localEffects: [] as string[],
   confirm: vi.fn<(message: string) => Promise<boolean>>(),
+  confirmSettle: vi.fn<(targets: ReadonlyArray<ScopedThreadRef>) => Promise<boolean>>(),
   toasts: [] as string[],
   afterRequest: undefined as ((action: string) => void) | undefined,
   sessionLookupFails: false,
@@ -190,6 +192,9 @@ vi.mock("../components/ui/toast", () => ({
     },
   },
 }));
+vi.mock("../settleAutomationGate", () => ({
+  confirmSettleWithAutomations: state.confirmSettle,
+}));
 vi.mock("./useHandleNewThread", () => ({ useNewThreadHandler: () => async () => {} }));
 vi.mock("./useSettings", () => ({
   useClientSettings: (select: (settings: unknown) => unknown) =>
@@ -283,6 +288,7 @@ beforeEach(() => {
   state.requests = [];
   state.localEffects = [];
   state.confirm.mockReset().mockResolvedValue(true);
+  state.confirmSettle.mockReset().mockResolvedValue(true);
   state.toasts = [];
   state.afterRequest = undefined;
   state.sessionLookupFails = false;
@@ -319,6 +325,22 @@ describe("thread action permissions", () => {
       ]);
     },
   );
+
+  it("settles nothing when the automation warning is cancelled", async () => {
+    state.scopes.get(secondary)!.add(AuthOrchestrationOperateScope);
+    state.confirmSettle.mockResolvedValue(false);
+    const result = await useThreadActions().settleThread(target);
+    expect(state.confirmSettle).toHaveBeenCalledWith([target]);
+    expect(isAtomCommandInterrupted(result)).toBe(true);
+    expect(state.requests).toEqual([]);
+  });
+
+  it("does not ask again when the caller already confirmed", async () => {
+    state.scopes.get(secondary)!.add(AuthOrchestrationOperateScope);
+    const result = await useThreadActions().settleThread(target, { automationsConfirmed: true });
+    expect(result._tag).toBe("Success");
+    expect(state.confirmSettle).not.toHaveBeenCalled();
+  });
 
   it.each(["confirmAndDeleteThread", "confirmAndUnpinThread"] as const)(
     "%s blocks a forbidden confirmation",

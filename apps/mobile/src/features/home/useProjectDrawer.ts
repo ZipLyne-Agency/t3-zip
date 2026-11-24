@@ -4,7 +4,7 @@ import type {
   EnvironmentThreadShell,
 } from "@t3tools/client-runtime/state/shell";
 import type { OlderSettledScope } from "@t3tools/client-runtime/state/threads";
-import type { EnvironmentId, ScopedProjectRef } from "@t3tools/contracts";
+import type { EnvironmentId, ProjectId, ScopedProjectRef } from "@t3tools/contracts";
 import type { SnoozePresetSetting } from "@t3tools/contracts/settings";
 import { AsyncResult } from "effect/reactivity";
 import { useGT } from "gt-react-native";
@@ -22,7 +22,9 @@ import { buildDrawerThreadShelves } from "./drawer-shelves";
 import {
   buildProjectDrawerModel,
   type ProjectDrawerModel,
+  railProjectKeysForMembers,
   type ProjectRailChange,
+  type SharedProjectRail,
 } from "./project-drawer";
 import type { ProjectSwitcherRow } from "./project-switcher";
 import { useProjectDrawerRail } from "./useProjectDrawerRail";
@@ -37,6 +39,8 @@ export interface ProjectDrawerData {
   /** The switcher rows before the rail is applied, for the button that opens the drawer. */
   readonly rows: ProjectSwitcherRows;
   readonly model: ProjectDrawerModel;
+  /** The shared rail the model is built from; null in the plain recent list. */
+  readonly rail: SharedProjectRail | null;
   /** Shared rail present and writable: the layout actions show. */
   readonly layoutActions: boolean;
   readonly selectedKey: string | null;
@@ -58,7 +62,16 @@ export interface ProjectDrawerData {
   /** Set only while an environment filter is on; the drawer then offers to clear it. */
   readonly onClearEnvironmentFilter: (() => void) | undefined;
   readonly apply: (change: ProjectRailChange) => void;
+  /** Shows the project if hidden and wakes it if snoozed, as sending a message there does. */
+  readonly bringBack: (projectKey: string) => void;
+  /** The project scope a thread belongs to, on any environment. */
+  readonly projectKeyOfThread: (thread: EnvironmentThreadShell) => string | null;
+  /** Environments a search in the drawer asks for message matches. */
+  readonly searchEnvironmentIds: ReadonlyArray<EnvironmentId>;
   readonly toggleFolder: (folderId: string) => void;
+  /** Favorites Only, kept on this device; only a shared layout has favorites. */
+  readonly favoritesOnly: boolean;
+  readonly setFavoritesOnly: (favoritesOnly: boolean) => void;
   readonly newFolder: (projectKey: string | undefined, name: string) => void;
   readonly newThread: (row: ProjectSwitcherRow) => void;
   readonly renameProject: (row: ProjectSwitcherRow, title: string) => void;
@@ -83,6 +96,7 @@ export function useProjectDrawer(input: {
   readonly allScopes: ReadonlyArray<DrawerScope>;
   readonly threads: ReadonlyArray<EnvironmentThreadShell>;
   readonly environmentId: EnvironmentId | null;
+  readonly searchEnvironmentIds: ReadonlyArray<EnvironmentId>;
   readonly selectedKey: string | null;
   readonly now: string;
   readonly settlementEnvironmentIds: ReadonlySet<EnvironmentId>;
@@ -102,21 +116,19 @@ export function useProjectDrawer(input: {
   const nowMs = Date.parse(input.now);
   const knownProjectKeys = input.rows.recent.flatMap((row) => (row.key === null ? [] : [row.key]));
   const scopeByKey = new Map(input.scopes.map((scope) => [scope.key, scope]));
-  const allScopeKeyByProject = new Map(
-    input.allScopes.flatMap((scope) =>
-      scope.projectRefs.map(
-        (ref) => [scopedProjectKey(ref.environmentId, ref.projectId), scope.key] as const,
-      ),
-    ),
-  );
+  const railGroups = input.allScopes.map((scope) => ({
+    projectKey: scope.key,
+    memberProjectRefs: scope.projectRefs,
+  }));
+  const projectKeyOf = (environmentId: EnvironmentId, projectId: ProjectId) =>
+    railProjectKeysForMembers(railGroups, [scopedProjectKey(environmentId, projectId)])[0] ?? null;
   const projectKeyOfSent = (message: SentThreadMessage) => {
     const projectId =
       input.threads.find(
         (thread) =>
           thread.environmentId === message.environmentId && thread.id === message.threadId,
       )?.projectId ?? message.projectId;
-    if (projectId === null) return null;
-    return allScopeKeyByProject.get(scopedProjectKey(message.environmentId, projectId)) ?? null;
+    return projectId === null ? null : projectKeyOf(message.environmentId, projectId);
   };
   const rail = useProjectDrawerRail({
     knownProjectKeys,
@@ -140,6 +152,13 @@ export function useProjectDrawer(input: {
         };
       },
     });
+  };
+
+  const favoritesOnlySaved = AsyncResult.isSuccess(preferences)
+    ? preferences.value.projectDrawerFavoritesOnly === true
+    : false;
+  const setFavoritesOnly = (favoritesOnly: boolean) => {
+    void savePreferences({ projectDrawerFavoritesOnly: favoritesOnly });
   };
 
   const model = buildProjectDrawerModel({
@@ -189,6 +208,7 @@ export function useProjectDrawer(input: {
   return {
     rows: input.rows,
     model,
+    rail: rail.rail,
     layoutActions: model.shared && rail.canEdit,
     selectedKey: input.selectedKey,
     nowMs,
@@ -207,7 +227,12 @@ export function useProjectDrawer(input: {
     onPick: input.onPick,
     onClearEnvironmentFilter: input.onClearEnvironmentFilter,
     apply: rail.apply,
+    bringBack: (projectKey) => rail.bringBack([projectKey]),
+    projectKeyOfThread: (thread) => projectKeyOf(thread.environmentId, thread.projectId),
+    searchEnvironmentIds: input.searchEnvironmentIds,
     toggleFolder,
+    favoritesOnly: favoritesOnlySaved && model.shared,
+    setFavoritesOnly,
     newFolder: (projectKey, name) =>
       rail.apply({
         kind: "new-folder",

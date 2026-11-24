@@ -1,7 +1,8 @@
+import { railProjectKeysForMembers } from "@t3tools/client-runtime/state/project-rail";
 import { describe, expect, it } from "vite-plus/test";
 
 import { setRailFolderCollapsed } from "./railLayout.logic";
-import { useProjectRailStore } from "./railStore";
+import { bringBackRailProject, useProjectRailStore } from "./railStore";
 
 describe("useProjectRailStore", () => {
   it("shows No Project at the bottom until the user moves it", () => {
@@ -73,6 +74,20 @@ describe("useProjectRailStore", () => {
     );
     expect(merged.filter).toBe("all");
     expect(merged.favoritesOnly).toBe(true);
+  });
+
+  it("loads the one-project Working and Done tab as Working, since the rail lists every project", () => {
+    const merge = useProjectRailStore.persist.getOptions().merge!;
+    const merged = merge(
+      {
+        layout: { top: [], folders: {} },
+        noProjectPosition: "top",
+        lastThreadByProject: {},
+        filter: "workingDone",
+      },
+      useProjectRailStore.getState(),
+    );
+    expect(merged.filter).toBe("working");
   });
 
   it("keeps folders, hidden projects and favorites when one saved value is unreadable", () => {
@@ -190,5 +205,72 @@ describe("useProjectRailStore", () => {
     });
     useProjectRailStore.getState().setProjectFavorite("a", true);
     expect(useProjectRailStore.getState().sharedPendingSince).toBe("2099-01-01T00:00:00.001Z");
+  });
+  describe("bringBackRailProject", () => {
+    const adoptRail = (rail: {
+      hiddenProjects: string[];
+      snoozedProjects: Record<string, string>;
+    }) =>
+      useProjectRailStore.getState().adoptSharedRail({
+        layout: { top: ["f:work", "p:b"], folders: { work: { name: "Work", projects: ["a"] } } },
+        favoriteProjects: [],
+        ...rail,
+        updatedAt: "2026-01-01T00:00:00.000Z",
+      });
+
+    it("shows a hidden project in its old place, opens its folder and marks the rail to sync", () => {
+      adoptRail({ hiddenProjects: ["a"], snoozedProjects: {} });
+      useProjectRailStore.getState().updateLayout(["a", "b"], (layout) => ({
+        ...layout,
+        folders: { work: { name: "Work", collapsed: true, projects: ["a"] } },
+      }));
+      expect(useProjectRailStore.getState().sharedPendingSince).toBeNull();
+      expect(bringBackRailProject("a")).toBe(true);
+      const state = useProjectRailStore.getState();
+      expect(state.hiddenProjects).toEqual([]);
+      expect(state.layout.folders.work).toEqual({
+        name: "Work",
+        collapsed: false,
+        projects: ["a"],
+      });
+      expect(state.layout.top).toEqual(["f:work", "p:b"]);
+      expect(state.sharedPendingSince).not.toBeNull();
+    });
+
+    it("wakes a snoozed project", () => {
+      adoptRail({ hiddenProjects: [], snoozedProjects: { b: "2099-01-01T00:00:00.000Z" } });
+      expect(bringBackRailProject("b")).toBe(true);
+      expect(useProjectRailStore.getState().snoozedProjects).toEqual({});
+      expect(useProjectRailStore.getState().sharedPendingSince).not.toBeNull();
+    });
+
+    it("leaves a project already in the rail alone", () => {
+      adoptRail({ hiddenProjects: [], snoozedProjects: {} });
+      const before = useProjectRailStore.getState();
+      expect(bringBackRailProject("b")).toBe(false);
+      expect(useProjectRailStore.getState()).toBe(before);
+    });
+
+    it("brings back the project a message was sent in, hidden or snoozed", () => {
+      adoptRail({ hiddenProjects: ["a"], snoozedProjects: { b: "2099-01-01T00:00:00.000Z" } });
+      const store = useProjectRailStore.getState();
+      store.noteSentInProject("env:a");
+      store.noteSentInProject("env:b");
+      // As the rail applies a send: each sent-in member project to its rail project, brought back.
+      const groups = ["a", "b", "c"].map((key) => ({
+        projectKey: key,
+        memberProjectRefs: [{ environmentId: "env", projectId: key }],
+      }));
+      const sent = useProjectRailStore.getState().sentInProjects;
+      expect(railProjectKeysForMembers(groups, sent)).toEqual(["a", "b"]);
+      for (const projectKey of railProjectKeysForMembers(groups, sent)) {
+        bringBackRailProject(projectKey);
+      }
+      store.clearSentInProjects();
+      const state = useProjectRailStore.getState();
+      expect(state.hiddenProjects).toEqual([]);
+      expect(state.snoozedProjects).toEqual({});
+      expect(state.sentInProjects).toEqual([]);
+    });
   });
 });

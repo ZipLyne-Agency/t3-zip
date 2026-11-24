@@ -1,5 +1,9 @@
 import { useAtomValue } from "@effect/atom-react";
 import { scopeProjectRef } from "@t3tools/client-runtime/environment";
+import {
+  threadStatusFilters,
+  type ThreadStatusFilter,
+} from "@t3tools/client-runtime/state/thread-status-filter";
 import { msg, useGT, useMessages } from "gt-react";
 import { useShallow } from "zustand/react/shallow";
 import {
@@ -46,7 +50,7 @@ import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { ClearAllButton, RAIL_FILTER_EMPTY_COPY, RailFilterBar } from "./RailFilters";
 import { NoProjectChip } from "./RailRows";
 import { railQueueAge, railQueueSinceMs } from "./railQueue.logic";
-import { type RailFilter, useProjectRailStore } from "./railStore";
+import { useProjectRailStore } from "./railStore";
 import { useUiStateStore } from "../../uiStateStore";
 import {
   backgroundRunningCount,
@@ -57,12 +61,17 @@ import {
 import {
   ALL_PROJECTS_SCOPE,
   buildThreadColumnSections,
+  buildWorkingDoneHalves,
   countThreadColumnFilters,
   groupThreadColumnItemsByProject,
   nextThreadAfterRemoval,
+  resolveColumnDraftedKeys,
+  resolveThreadColumnFilter,
   THREAD_COLUMN_WIDTH,
   threadColumnAge,
   type ThreadColumnItem,
+  type OpenThreadDraftLatch,
+  type ThreadColumnSection,
 } from "./threadColumn.logic";
 import { useClearFromDone } from "./useClearFromDone";
 import { useSnoozedProjectKeys } from "./useProjectSnooze";
@@ -75,9 +84,17 @@ type ColumnEntry = ThreadColumnItem & {
   readonly projectKey: string;
   /** The project, used for its name and favicon when the column lists every project. */
   readonly group: SidebarProjectSnapshot | null;
+  /** Shows the draft pen: unsent text in a thread other than the open one, as in the tabs. */
+  readonly draftPen: boolean;
 };
 
 const DRAFT_PROJECT_KEY = "draft";
+
+/** The combined tab's half headings. */
+const HALF_HEADING: Record<"working" | "done", string> = {
+  working: msg("Working", { $context: "heading of the running threads in the combined tab" }),
+  done: msg("Done", { $context: "heading of the finished threads in the combined tab" }),
+};
 
 function parseMs(value: string | null | undefined): number {
   if (!value) return 0;
@@ -91,6 +108,7 @@ function threadEntry(
   hasDraft: boolean,
   status: OpenThreadStatus = tab.status,
   doneSection: DoneSection | null = null,
+  draftPen = hasDraft,
 ): ColumnEntry {
   const updatedMs = parseMs(tab.thread.updatedAt);
   return {
@@ -105,6 +123,7 @@ function threadEntry(
     tab,
     projectKey: group?.projectKey ?? `${tab.thread.environmentId}:${tab.thread.projectId}`,
     group,
+    draftPen,
   };
 }
 
@@ -121,6 +140,7 @@ function draftEntry(tab: DraftTabEntry): ColumnEntry {
     tab,
     projectKey: DRAFT_PROJECT_KEY,
     group: null,
+    draftPen: false,
   };
 }
 
@@ -215,11 +235,12 @@ function HeaderButton(props: {
 }
 
 /** The row's one hover action, over its time: Settle, or Clear under Done. */
+/** The hover actions sit over the end of the title, so `row-action-opaque` keeps them solid. */
 const HOVER_ACTION_CLASS_NAME =
-  "absolute top-1.5 right-1.5 inline-flex h-5 cursor-pointer items-center gap-1 rounded-md px-1.5 text-xs text-sidebar-muted-foreground opacity-0 outline-none transition-opacity duration-100 hover:bg-sidebar-row-hover hover:text-sidebar-foreground focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset group-hover/column-row:opacity-100 motion-reduce:transition-none pointer-coarse:opacity-100";
+  "row-action-opaque absolute top-1.5 right-1.5 inline-flex h-5 cursor-pointer items-center gap-1 rounded-md px-1.5 text-xs text-sidebar-muted-foreground opacity-0 outline-none transition-opacity duration-100 hover:text-sidebar-foreground focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset group-hover/column-row:opacity-100 motion-reduce:transition-none pointer-coarse:opacity-100";
 /** Clear from Done is green, like the Done chip and the phone app, so it never reads as Settle. */
 const CLEAR_ACTION_CLASS_NAME =
-  "absolute top-1.5 right-1.5 inline-flex h-5 cursor-pointer items-center gap-1 rounded-md px-1.5 text-xs text-success-foreground opacity-0 outline-none transition-opacity duration-100 hover:bg-success/16 hover:text-success-foreground focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset group-hover/column-row:opacity-100 motion-reduce:transition-none pointer-coarse:opacity-100";
+  "row-action-opaque absolute top-1.5 right-1.5 inline-flex h-5 cursor-pointer items-center gap-1 rounded-md px-1.5 text-xs text-success-foreground opacity-0 outline-none transition-opacity duration-100 focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset group-hover/column-row:opacity-100 motion-reduce:transition-none pointer-coarse:opacity-100";
 
 function ColumnRow(props: {
   readonly entry: ColumnEntry;
@@ -311,7 +332,7 @@ function ColumnRow(props: {
     status,
     runningLabel,
     projectName,
-    entry.hasDraft ? gt("Unsent draft") : null,
+    entry.draftPen ? gt("Unsent draft") : null,
     entry.pinned ? gt("Pinned") : null,
     props.muteLabel,
   ]
@@ -354,7 +375,7 @@ function ColumnRow(props: {
                   "group-hover/column-row:invisible group-focus-within/column-row:invisible",
               )}
             >
-              {entry.hasDraft ? (
+              {entry.draftPen ? (
                 <SquarePenIcon
                   role="img"
                   aria-label={gt("Unsent draft")}
@@ -397,6 +418,8 @@ function ColumnRow(props: {
                 type="button"
                 aria-label={gt("Clear {title}", { title: tab.title })}
                 onClick={props.onClear}
+                data-tone="success"
+                data-row-active={active ? "" : undefined}
                 className={CLEAR_ACTION_CLASS_NAME}
               />
             }
@@ -414,6 +437,7 @@ function ColumnRow(props: {
                 type="button"
                 aria-label={gt("Settle {title}", { title: tab.title })}
                 onClick={props.onSettle}
+                data-row-active={active ? "" : undefined}
                 className={HOVER_ACTION_CLASS_NAME}
               />
             }
@@ -446,23 +470,17 @@ function ThreadColumnPanel() {
   const source = useThreadTabsSource();
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
   const openTab = useOpenTab();
-  // A filter belongs to the project it was picked in. Any other project, whether picked in the
-  // rail or reached through a tab or link, opens on All. All Projects has no All filter (every
-  // thread at once is no help there), so it opens on Waiting.
-  const [picked, setPicked] = useState<{ readonly scope: string; readonly filter: RailFilter }>({
-    scope: column.scope,
-    filter: "all",
-  });
-  const defaultFilter: RailFilter = column.scope === ALL_PROJECTS_SCOPE ? "waiting" : "all";
-  const pickedFilter = picked.scope === column.scope ? picked.filter : defaultFilter;
-  const filter =
-    column.scope === ALL_PROJECTS_SCOPE && pickedFilter === "all" ? "waiting" : pickedFilter;
-  const setFilter = (next: RailFilter) => setPicked({ scope: column.scope, filter: next });
+  // A filter belongs to the project it was picked in; see `resolveThreadColumnFilter`.
+  const [picked, setPicked] = useState<{
+    readonly scope: string;
+    readonly filter: ThreadStatusFilter;
+  }>({ scope: column.scope, filter: "all" });
+  const setFilter = (next: ThreadStatusFilter) => setPicked({ scope: column.scope, filter: next });
   const setThreadColumnOpen = useProjectRailStore((store) => store.setThreadColumnOpen);
   const handleNewThread = useNewThreadHandler();
   const { scratchEnvironmentId, startScratchThread } = useScratchProject();
   const { formatTime } = useThreadMuteActions();
-  const { settleThread } = useThreadActions();
+  const { settleThread, confirmSettle } = useThreadActions();
   const [menuRequest, setMenuRequest] = useState<MenuRequest | null>(null);
   const [renamingKey, setRenamingKey] = useState<string | null>(null);
   const clearedAtById = useUiStateStore((state) => state.threadDoneClearedAtById);
@@ -486,6 +504,9 @@ function ThreadColumnPanel() {
   const memberKeys = new Set(
     (group === null ? column.groups : [group]).flatMap((member) => [...groupMemberKeys(member)]),
   );
+  // Every scope, All Projects and No Project too, combines Working and Done into one tab.
+  const filter = resolveThreadColumnFilter({ picked, scope: column.scope });
+  const filterTabs = threadStatusFilters(true).filter((value) => !allScope || value !== "all");
   const groupByMember = new Map<string, SidebarProjectSnapshot>();
   for (const member of column.groups) {
     for (const key of groupMemberKeys(member)) groupByMember.set(key, member);
@@ -508,16 +529,18 @@ function ThreadColumnPanel() {
       ),
   );
   const drafts = useDraftTabs(memberKeys, column.routeDraftId);
-  // As in the sidebar and the tabs, the open thread does not flag its own draft.
-  const draftedKeys = new Set(
+  const unsentKeys = new Set(
     useComposerDraftStore(
       useShallow((state) =>
-        threadTabs
-          .filter((tab) => tab.key !== column.routeKey && threadHasUnsentDraft(state, tab.ref))
-          .map((tab) => tab.key),
+        threadTabs.filter((tab) => threadHasUnsentDraft(state, tab.ref)).map((tab) => tab.key),
       ),
     ),
   );
+  // Drafts lists every thread with unsent text, the open one included, so a row stays put when
+  // clicked; the open thread keeps the place it was opened in (see `resolveColumnDraftedKeys`).
+  const [draftLatch, setDraftLatch] = useState<OpenThreadDraftLatch | null>(null);
+  const drafted = resolveColumnDraftedKeys(unsentKeys, column.routeKey, draftLatch);
+  if (drafted.latch !== draftLatch) setDraftLatch(drafted.latch);
   const entries: ColumnEntry[] = [
     ...drafts.map(draftEntry),
     ...threadTabs.map((tab) => {
@@ -532,7 +555,7 @@ function ThreadColumnPanel() {
       return threadEntry(
         tab,
         groupByMember.get(`${tab.thread.environmentId}:${tab.thread.projectId}`) ?? null,
-        draftedKeys.has(tab.key),
+        drafted.draftedKeys.has(tab.key),
         status,
         resolveDoneSection(
           status,
@@ -541,10 +564,21 @@ function ThreadColumnPanel() {
           clearedAtById[tab.key],
           doneReviewSince,
         ),
+        // As in the sidebar and the tabs, the open thread does not flag its own draft.
+        unsentKeys.has(tab.key) && tab.key !== column.routeKey,
       );
     }),
   ];
-  const sections = buildThreadColumnSections(entries, filter, source.nowMs);
+  // The combined tab shows Done over Working, each half with its own list.
+  let halves: ReturnType<typeof buildWorkingDoneHalves<ColumnEntry>> | null = null;
+  let sections: ThreadColumnSection<ColumnEntry>[];
+  if (filter === "workingDone") {
+    halves = buildWorkingDoneHalves(entries, source.nowMs);
+    // Top to bottom as it shows, so Settle and Clear move on to the right thread.
+    sections = [...halves.done, ...halves.working];
+  } else {
+    sections = buildThreadColumnSections(entries, filter, source.nowMs);
+  }
   const counts = countThreadColumnFilters(entries);
   const renderRow = (entry: ColumnEntry, showProject: boolean) => (
     <ColumnRow
@@ -560,8 +594,12 @@ function ThreadColumnPanel() {
       }
       renaming={renamingKey === entry.key}
       onOpen={() => open(entry)}
-      onSettle={entry.tab.kind === "thread" ? () => settle(entry) : null}
-      onClear={filter === "done" && entry.doneSection !== null ? () => clear([entry]) : null}
+      onSettle={entry.tab.kind === "thread" ? () => void settle(entry) : null}
+      onClear={
+        (filter === "done" || filter === "workingDone") && entry.doneSection !== null
+          ? () => clear([entry])
+          : null
+      }
       onContextMenu={onContextMenu(entry)}
       onRenameDone={() => setRenamingKey(null)}
     />
@@ -617,16 +655,19 @@ function ThreadColumnPanel() {
       )
       .filter((item, index, all) => all.findIndex((other) => other.key === item.key) === index);
 
-  const settle = (entry: ColumnEntry) => {
+  const settle = async (entry: ColumnEntry) => {
     if (entry.tab.kind !== "thread") return;
     const tab = entry.tab;
+    // Ask before moving to the next thread, so Cancel leaves you where you were.
+    if (!(await confirmSettle([tab.ref]))) return;
     const wasOpen = entry.key === column.routeKey;
     // Move to the next thread in the list, as closing a tab does.
     const next = nextThreadAfterRemoval(shownOrder(), new Set([entry.key]), column.routeKey);
     if (next !== null) open(next);
-    void settleThread(tab.ref, wasOpen ? { onUndone: () => void openTab(tab) } : undefined).then(
-      (result) => reportThreadActionFailure(m(msg("Failed to settle thread")), result),
-    );
+    void settleThread(tab.ref, {
+      automationsConfirmed: true,
+      ...(wasOpen ? { onUndone: () => void openTab(tab) } : {}),
+    }).then((result) => reportThreadActionFailure(m(msg("Failed to settle thread")), result));
   };
 
   const clear = (cleared: readonly ColumnEntry[]) => {
@@ -661,11 +702,83 @@ function ThreadColumnPanel() {
   };
 
   const emptyCopy =
-    filter === "all"
+    filter === "all" || filter === "workingDone"
       ? group === null
         ? gt("No open threads in any project.")
         : gt("No open threads in this project.")
       : resolve(RAIL_FILTER_EMPTY_COPY[filter]);
+
+  /** One section's heading and rows; `showLabel` is off where the half's heading names it. */
+  const renderSection = (section: ThreadColumnSection<ColumnEntry>, showLabel = true) => (
+    <section key={section.id} aria-label={resolve(section.label)} className="pt-2">
+      {showLabel ? (
+        <h3 className="flex items-center justify-between gap-2 px-2 pb-1 text-xs font-medium text-sidebar-muted-foreground">
+          <span>{resolve(section.label)}</span>
+          <span className="flex items-center gap-2">
+            {section.id === "new" || section.id === "opened" ? (
+              <ClearAllButton
+                section={resolve(section.label)}
+                onClick={() => clear(section.items)}
+              />
+            ) : null}
+            <span className="tabular-nums">{section.items.length}</span>
+          </span>
+        </h3>
+      ) : null}
+      {allScope && section.id !== "drafts" ? (
+        // Every project is listed, so each section splits by project under its own heading.
+        groupThreadColumnItemsByProject(section.items).map((projectGroup) => (
+          <section
+            key={projectGroup.projectKey}
+            aria-label={
+              projectGroup.items[0]?.group ? groupName(projectGroup.items[0].group, gt) : undefined
+            }
+          >
+            <ProjectSubheader
+              group={projectGroup.items[0]?.group ?? null}
+              count={projectGroup.items.length}
+            />
+            <ul className="flex flex-col gap-px">
+              {projectGroup.items.map((entry) => renderRow(entry, false))}
+            </ul>
+          </section>
+        ))
+      ) : (
+        <ul className="flex flex-col gap-px">
+          {section.items.map((entry) => renderRow(entry, allScope))}
+        </ul>
+      )}
+    </section>
+  );
+
+  /**
+   * One half of the combined tab. Each takes half the column whatever it holds, so nothing moves
+   * when a thread goes from Working to Done; its heading stays put and its list scrolls.
+   */
+  const renderHalf = (
+    kind: "working" | "done",
+    halfSections: readonly ThreadColumnSection<ColumnEntry>[],
+  ) => {
+    const label = resolve(HALF_HEADING[kind]);
+    return (
+      <section aria-label={label} className="flex min-h-0 flex-col">
+        <h3 className="flex h-7 shrink-0 items-center justify-between gap-2 px-4 pt-1 text-xs font-semibold text-sidebar-foreground">
+          <span>{label}</span>
+          <span className="tabular-nums text-sidebar-muted-foreground">{counts[kind]}</span>
+        </h3>
+        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-2 pb-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+          {halfSections.length === 0 ? (
+            <p className="px-2 py-2 text-xs text-sidebar-muted-foreground">
+              {resolve(RAIL_FILTER_EMPTY_COPY[kind])}
+            </p>
+          ) : (
+            // The running threads sit under the half's own Working heading, not a second one.
+            halfSections.map((section) => renderSection(section, section.id !== "working"))
+          )}
+        </div>
+      </section>
+    );
+  };
 
   return (
     <aside
@@ -697,63 +810,30 @@ function ThreadColumnPanel() {
         </HeaderButton>
       </header>
       <div className="shrink-0 border-b border-(--rail-divider,var(--sidebar-border)) px-2 pb-2">
-        <RailFilterBar filter={filter} onChange={setFilter} counts={counts} showAll={!allScope} />
+        <RailFilterBar filters={filterTabs} filter={filter} onChange={setFilter} counts={counts} />
       </div>
-      <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-2 pt-1 pb-3 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-        {sections.length === 0 ? (
-          <div className="flex flex-col items-center gap-3 px-4 py-10 text-center">
-            <p className="text-xs text-sidebar-muted-foreground">{emptyCopy}</p>
-            {filter === "all" ? (
-              <Button variant="outline" size="xs" onClick={newThread}>
-                <SquarePenIcon aria-hidden />
-                {gt("New Thread")}
-              </Button>
-            ) : null}
-          </div>
-        ) : (
-          sections.map((section) => (
-            <section key={section.id} aria-label={resolve(section.label)} className="pt-2">
-              <h3 className="flex items-center justify-between gap-2 px-2 pb-1 text-xs font-medium text-sidebar-muted-foreground">
-                <span>{resolve(section.label)}</span>
-                <span className="flex items-center gap-2">
-                  {section.id === "new" || section.id === "opened" ? (
-                    <ClearAllButton
-                      section={resolve(section.label)}
-                      onClick={() => clear(section.items)}
-                    />
-                  ) : null}
-                  <span className="tabular-nums">{section.items.length}</span>
-                </span>
-              </h3>
-              {allScope && section.id !== "drafts" ? (
-                // Every project is listed, so each section splits by project under its own heading.
-                groupThreadColumnItemsByProject(section.items).map((projectGroup) => (
-                  <section
-                    key={projectGroup.projectKey}
-                    aria-label={
-                      projectGroup.items[0]?.group
-                        ? groupName(projectGroup.items[0].group, gt)
-                        : undefined
-                    }
-                  >
-                    <ProjectSubheader
-                      group={projectGroup.items[0]?.group ?? null}
-                      count={projectGroup.items.length}
-                    />
-                    <ul className="flex flex-col gap-px">
-                      {projectGroup.items.map((entry) => renderRow(entry, false))}
-                    </ul>
-                  </section>
-                ))
-              ) : (
-                <ul className="flex flex-col gap-px">
-                  {section.items.map((entry) => renderRow(entry, allScope))}
-                </ul>
-              )}
-            </section>
-          ))
-        )}
-      </div>
+      {halves !== null ? (
+        <div className="grid min-h-0 flex-1 grid-rows-2 divide-y divide-(--rail-divider,var(--sidebar-border))">
+          {renderHalf("done", halves.done)}
+          {renderHalf("working", halves.working)}
+        </div>
+      ) : (
+        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-2 pt-1 pb-3 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+          {sections.length === 0 ? (
+            <div className="flex flex-col items-center gap-3 px-4 py-10 text-center">
+              <p className="text-xs text-sidebar-muted-foreground">{emptyCopy}</p>
+              {filter === "all" ? (
+                <Button variant="outline" size="xs" onClick={newThread}>
+                  <SquarePenIcon aria-hidden />
+                  {gt("New Thread")}
+                </Button>
+              ) : null}
+            </div>
+          ) : (
+            sections.map((section) => renderSection(section))
+          )}
+        </div>
+      )}
       {menuRequest ? (
         <TabActionMenu
           key={menuRequest.id}

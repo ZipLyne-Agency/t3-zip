@@ -208,6 +208,15 @@ interface RightPanelStoreState {
     keepSource?: boolean,
   ) => void;
   openAttachment: (ref: ScopedThreadRef, attachment: ChatFileAttachment) => void;
+  /**
+   * T3 Zip: after a rename or delete in the Files panel, each workspace file tab moves to the
+   * path `follow` returns, or closes on null; undefined leaves it. A closed active tab becomes
+   * the file explorer.
+   */
+  followFileEntryChange: (
+    ref: ScopedThreadRef,
+    follow: (relativePath: string) => string | null | undefined,
+  ) => void;
   openPullRequest: (
     ref: ScopedThreadRef,
     target: {
@@ -1062,6 +1071,37 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
                 : [surface];
             });
             return { ...current, isOpen: true, activeSurfaceId: target.id, surfaces };
+          }),
+        ),
+      followFileEntryChange: (ref, follow) =>
+        set((state) =>
+          userAction(state, scopedThreadKey(ref), (current) => {
+            let activeSurfaceId = current.activeSurfaceId;
+            let changed = false;
+            const seen = new Set<string>();
+            const surfaces = current.surfaces.flatMap((surface) => {
+              const file = surface.kind === "file" && !surface.attachment ? surface : null;
+              const next = file ? follow(file.relativePath) : undefined;
+              if (next !== undefined) changed = true;
+              const replacement =
+                next === undefined || !file
+                  ? surface
+                  : next !== null
+                    ? fileSurface(next, null, file.revealRequestId + 1)
+                    : surface.id === current.activeSurfaceId
+                      ? singletonSurface("files")
+                      : null;
+              if (surface.id === current.activeSurfaceId) activeSurfaceId = replacement?.id ?? null;
+              if (replacement === null || seen.has(replacement.id)) return [];
+              seen.add(replacement.id);
+              return [replacement];
+            });
+            if (!changed) return current;
+            return {
+              ...current,
+              surfaces,
+              activeSurfaceId: activeSurfaceId ?? surfaces[0]?.id ?? null,
+            };
           }),
         ),
       openAttachment: (ref, attachment) =>

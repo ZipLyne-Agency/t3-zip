@@ -1,4 +1,7 @@
-import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
+import type {
+  EnvironmentProject,
+  EnvironmentThreadShell,
+} from "@t3tools/client-runtime/state/shell";
 import {
   countThreadStatusFilters,
   matchesThreadStatusFilter,
@@ -16,6 +19,8 @@ import type {
   ThreadDoneClears,
   ThreadListStatusFilter,
 } from "../../persistence/mobile-preferences";
+import type { HomeProjectScope } from "../home/homeThreadList";
+import { scopedProjectKey } from "../../lib/scopedEntities";
 import {
   getThreadListV2OrderedSection,
   resolveThreadListV2RowStatus,
@@ -112,15 +117,44 @@ function byKey(left: ThreadStatusEntry, right: ThreadStatusEntry): number {
   return left.key < right.key ? -1 : 1;
 }
 
+/** The project a Done thread lists under when every project is shown. */
+export interface ThreadStatusProjectGroup {
+  readonly key: string;
+  readonly title: string;
+  readonly project: EnvironmentProject;
+  readonly scratch: boolean;
+}
+
+/** Each project's group, by `environmentId:projectId`, from the scopes the project filter offers. */
+export function buildThreadStatusProjectGroups(
+  scopes: ReadonlyArray<HomeProjectScope>,
+): ReadonlyMap<string, ThreadStatusProjectGroup> {
+  const groups = new Map<string, ThreadStatusProjectGroup>();
+  for (const scope of scopes) {
+    const group = {
+      key: scope.key,
+      title: scope.title,
+      project: scope.representative,
+      scratch: scope.representative.isScratch === true,
+    };
+    for (const ref of scope.projectRefs) {
+      groups.set(scopedProjectKey(ref.environmentId, ref.projectId), group);
+    }
+  }
+  return groups;
+}
+
 /**
- * One filter's rows. Needs You and Working are one list each; Done is New, then Opened, each
- * under its heading, the first heading carrying Clear All. Each row swipes to Clear in Done.
+ * One filter's rows. Done is New, then Opened, the first heading carrying Clear All. With
+ * `projectGroups` (every project shown) each heading splits by project as the desktop column
+ * does: projects in the order of their newest thread, threads newest first.
  */
 export function buildThreadStatusListItems(input: {
   readonly entries: ReadonlyArray<ThreadStatusEntry>;
-  readonly filter: Exclude<ThreadListStatusFilter, "all">;
+  readonly filter: "waiting" | "working" | "done";
   readonly now: string;
   readonly decorate: (items: ReadonlyArray<ThreadListV2Item>) => ThreadListV2ListItem[];
+  readonly projectGroups?: ReadonlyMap<string, ThreadStatusProjectGroup> | null;
 }): ThreadListV2ListItem[] {
   const listed = input.entries.filter((entry) => matchesThreadStatusFilter(entry, input.filter));
   const toItem = (entry: ThreadStatusEntry): ThreadListV2Item => ({
@@ -145,6 +179,7 @@ export function buildThreadStatusListItems(input: {
     const items = listed.filter((entry) => entry.doneSection === section).sort(newestFirst);
     return items.length === 0 ? [] : [{ section, items }];
   });
+  const projectGroups = input.projectGroups ?? null;
   const result: ThreadListV2ListItem[] = [];
   sections.forEach(({ section, items }, index) => {
     result.push({
@@ -154,12 +189,81 @@ export function buildThreadStatusListItems(input: {
       count: items.length,
       clearAllCount: index === 0 ? listed.length : 0,
     });
-    const rows = input
-      .decorate(markLast(items.map(toItem), index === sections.length - 1))
-      .map((row) => (row.type === "v2-thread" ? { ...row, doneSection: section } : row));
-    result.push(...rows);
+    const lastSection = index === sections.length - 1;
+    const pushRows = (entries: ReadonlyArray<ThreadStatusEntry>, last: boolean) => {
+      const rows = input
+        .decorate(markLast(entries.map(toItem), last))
+        .map((row) => (row.type === "v2-thread" ? { ...row, doneSection: section } : row));
+      result.push(...rows);
+    };
+    if (projectGroups === null) {
+      pushRows(items, lastSection);
+      return;
+    }
+    const byProject = groupByProject(items, projectGroups);
+    byProject.forEach(({ key, group, entries }, groupIndex) => {
+      result.push({
+        type: "v2-status-project",
+        key: `v2-status-project:${section}:${key}`,
+        title: group?.title ?? null,
+        project: group?.project ?? null,
+        scratch: group?.scratch ?? false,
+        count: entries.length,
+      });
+      pushRows(entries, lastSection && groupIndex === byProject.length - 1);
+    });
   });
   return withDividers(result);
+}
+
+/**
+ * A status tab's rows. Working leads with the tasks about to run. The combined tab, shown for
+ * one project, keeps Done and Working as two lists, Done first, and lists both in `items`.
+ */
+export function buildThreadStatusFilterRows(input: {
+  readonly entries: ReadonlyArray<ThreadStatusEntry>;
+  readonly filter: Exclude<ThreadListStatusFilter, "all">;
+  readonly now: string;
+  readonly decorate: (items: ReadonlyArray<ThreadListV2Item>) => ThreadListV2ListItem[];
+  readonly projectGroups: ReadonlyMap<string, ThreadStatusProjectGroup> | null;
+  readonly pendingRows: () => ThreadListV2ListItem[];
+}): {
+  readonly items: ThreadListV2ListItem[];
+  readonly split: {
+    readonly done: ThreadListV2ListItem[];
+    readonly working: ThreadListV2ListItem[];
+  } | null;
+} {
+  const rowsFor = (filter: "waiting" | "working" | "done") => {
+    const rows = buildThreadStatusListItems({ ...input, filter });
+    return filter === "working" ? [...input.pendingRows(), ...rows] : rows;
+  };
+  if (input.filter !== "workingDone") return { items: rowsFor(input.filter), split: null };
+  const split = { done: rowsFor("done"), working: rowsFor("working") };
+  return { items: [...split.done, ...split.working], split };
+}
+
+const UNKNOWN_PROJECT_KEY = "unknown";
+
+/** Projects in the order of their first thread here, each keeping its threads' order. */
+function groupByProject(
+  entries: ReadonlyArray<ThreadStatusEntry>,
+  projectGroups: ReadonlyMap<string, ThreadStatusProjectGroup>,
+) {
+  const groups = new Map<
+    string,
+    { key: string; group: ThreadStatusProjectGroup | null; entries: ThreadStatusEntry[] }
+  >();
+  for (const entry of entries) {
+    const group =
+      projectGroups.get(scopedProjectKey(entry.thread.environmentId, entry.thread.projectId)) ??
+      null;
+    const key = group?.key ?? UNKNOWN_PROJECT_KEY;
+    const existing = groups.get(key);
+    if (existing) existing.entries.push(entry);
+    else groups.set(key, { key, group, entries: [entry] });
+  }
+  return [...groups.values()];
 }
 
 function markLast(items: ThreadListV2Item[], last = true): ThreadListV2Item[] {

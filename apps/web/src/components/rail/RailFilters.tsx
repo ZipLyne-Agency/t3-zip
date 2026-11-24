@@ -1,3 +1,4 @@
+import type { ThreadStatusFilter } from "@t3tools/client-runtime/state/thread-status-filter";
 import { CheckCheckIcon } from "lucide-react";
 import { msg, T, useGT, useMessages } from "gt-react";
 import type { KeyboardEvent } from "react";
@@ -5,10 +6,9 @@ import type { KeyboardEvent } from "react";
 import { cn } from "~/lib/utils";
 import { TopStatusIcon } from "../sidebar/SidebarThreadRow";
 import { groupRailWaiting, railQueueAge } from "./railQueue.logic";
-import type { RailFilter } from "./railStore";
 import type { RailQueueItem } from "./useRailQueue";
 
-type QueueFilter = Exclude<RailFilter, "all">;
+type QueueFilter = "waiting" | "working" | "done";
 
 /** The status colors the rows use: amber needs you, blue working, green done. */
 const BADGE_TONE: Record<QueueFilter, string> = {
@@ -17,28 +17,44 @@ const BADGE_TONE: Record<QueueFilter, string> = {
   done: "bg-success/16 text-success-foreground ring-success/40 dark:bg-success/24",
 };
 
-const FILTERS: ReadonlyArray<{ readonly value: RailFilter; readonly label: string }> = [
-  { value: "all", label: msg("All", { $context: "filter: every thread" }) },
-  { value: "waiting", label: msg("Waiting", { $context: "filter: threads waiting on you" }) },
-  { value: "working", label: msg("Working", { $context: "filter: threads running now" }) },
-  { value: "done", label: msg("Done", { $context: "filter: finished threads" }) },
-];
+const FILTER_LABEL: Record<"all" | QueueFilter, string> = {
+  all: msg("All", { $context: "filter: every thread" }),
+  waiting: msg("Waiting", { $context: "filter: threads waiting on you" }),
+  working: msg("Working", { $context: "filter: threads running now" }),
+  done: msg("Done", { $context: "filter: finished threads" }),
+};
+
+/** A count badge in its list's color; it shows only while the list has threads. */
+function FilterCount(props: { readonly kind: QueueFilter; readonly count: number }) {
+  if (props.count === 0) return null;
+  return (
+    <span
+      aria-hidden
+      className={cn(
+        "inline-flex h-4 min-w-4 shrink-0 items-center justify-center rounded-full px-1 text-3xs font-semibold tabular-nums ring-1 ring-inset transition duration-150 ease-out starting:scale-75 starting:opacity-0 motion-reduce:transition-none",
+        BADGE_TONE[props.kind],
+      )}
+    >
+      {props.count}
+    </span>
+  );
+}
 
 /**
- * The thread column's filters: All, or only the threads waiting on you, running or finished.
- * All Projects leaves out All, since every thread of every project in one list is no help.
- * A count badge shows only while a list has threads, so a quiet row stays short.
+ * The thread filters: All, or only the threads waiting on you, running or finished. The caller
+ * picks the tabs: one project shows Working and Done as one tab, each word with its own count,
+ * and All Projects leaves out All. A count badge shows only while a list has threads, so a
+ * quiet row stays short.
  */
-export function RailFilterBar(props: {
-  readonly filter: RailFilter;
-  readonly onChange: (filter: RailFilter) => void;
+export function RailFilterBar<F extends ThreadStatusFilter>(props: {
+  readonly filters: ReadonlyArray<F>;
+  readonly filter: F;
+  readonly onChange: (filter: F) => void;
   readonly counts: Readonly<Record<QueueFilter, number>>;
-  readonly showAll?: boolean;
 }) {
   const gt = useGT();
   const m = useMessages();
-  const filters =
-    props.showAll === false ? FILTERS.filter(({ value }) => value !== "all") : FILTERS;
+  const { filters, counts } = props;
   // A radio group is one Tab stop; the arrow keys move the choice, wrapping at the ends.
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     const step =
@@ -49,10 +65,22 @@ export function RailFilterBar(props: {
           : 0;
     if (step === 0) return;
     event.preventDefault();
-    const index = filters.findIndex(({ value }) => value === props.filter);
-    const next = filters[(index + step + filters.length) % filters.length]!.value;
+    const index = filters.findIndex((value) => value === props.filter);
+    const next = filters[(index + step + filters.length) % filters.length]!;
     props.onChange(next);
     event.currentTarget.querySelector<HTMLElement>(`[data-rail-filter="${next}"]`)?.focus();
+  };
+  const accessibleLabel = (value: ThreadStatusFilter): string => {
+    if (value === "workingDone") {
+      return gt("Working: {working}, Done: {done}", {
+        $context: "filter tab for running and finished threads, with their counts",
+        working: counts.working,
+        done: counts.done,
+      });
+    }
+    const text = m(FILTER_LABEL[value]);
+    const count = value === "all" ? 0 : counts[value];
+    return count > 0 ? gt("{label}: {count}", { label: text, count }) : text;
   };
   return (
     // Wraps instead of clipping a label when the sidebar is narrow.
@@ -62,10 +90,10 @@ export function RailFilterBar(props: {
       className="flex flex-wrap items-center gap-0.5 px-1 pt-2"
       onKeyDown={onKeyDown}
     >
-      {filters.map(({ value, label }) => {
-        const selected = props.filter === value;
-        const count = value === "all" ? 0 : props.counts[value];
-        const text = m(label);
+      {filters.map((tab) => {
+        const selected = props.filter === tab;
+        // Widened from F so the checks below narrow it.
+        const value: ThreadStatusFilter = tab;
         return (
           <button
             key={value}
@@ -74,8 +102,8 @@ export function RailFilterBar(props: {
             aria-checked={selected}
             data-rail-filter={value}
             tabIndex={selected ? 0 : -1}
-            aria-label={count > 0 ? gt("{label}: {count}", { label: text, count }) : text}
-            onClick={() => props.onChange(value)}
+            aria-label={accessibleLabel(value)}
+            onClick={() => props.onChange(tab)}
             className={cn(
               "flex h-6 min-w-0 cursor-pointer items-center gap-1.5 rounded-md px-2 text-xs font-medium whitespace-nowrap outline-none transition-colors duration-150 ease-out focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring motion-reduce:transition-none",
               selected
@@ -83,18 +111,23 @@ export function RailFilterBar(props: {
                 : "text-sidebar-muted-foreground hover:bg-sidebar-row-hover hover:text-sidebar-foreground",
             )}
           >
-            {text}
-            {value !== "all" && count > 0 ? (
-              <span
-                aria-hidden
-                className={cn(
-                  "inline-flex h-4 min-w-4 shrink-0 items-center justify-center rounded-full px-1 text-3xs font-semibold tabular-nums ring-1 ring-inset transition duration-150 ease-out starting:scale-75 starting:opacity-0 motion-reduce:transition-none",
-                  BADGE_TONE[value],
-                )}
-              >
-                {count}
-              </span>
-            ) : null}
+            {value === "workingDone" ? (
+              // The two tabs it replaces, side by side in one: no wider than both together.
+              <>
+                {m(FILTER_LABEL.working)}
+                <FilterCount kind="working" count={counts.working} />
+                <span aria-hidden className="text-sidebar-muted-foreground">
+                  ·
+                </span>
+                {m(FILTER_LABEL.done)}
+                <FilterCount kind="done" count={counts.done} />
+              </>
+            ) : (
+              <>
+                {m(FILTER_LABEL[value])}
+                {value === "all" ? null : <FilterCount kind={value} count={counts[value]} />}
+              </>
+            )}
           </button>
         );
       })}
@@ -186,7 +219,8 @@ function QueueRow(props: {
           type="button"
           aria-label={gt("Clear {title}", { title: item.thread.title })}
           onClick={() => onClear(item)}
-          className="absolute top-1.5 right-1.5 inline-flex h-5 cursor-pointer items-center gap-1 rounded-md px-1.5 text-xs text-success-foreground opacity-0 outline-none transition-opacity duration-100 hover:bg-success/16 hover:text-success-foreground focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset group-hover/queue-row:opacity-100 motion-reduce:transition-none pointer-coarse:opacity-100"
+          data-tone="success"
+          className="row-action-opaque absolute top-1.5 right-1.5 inline-flex h-5 cursor-pointer items-center gap-1 rounded-md px-1.5 text-xs text-success-foreground opacity-0 outline-none transition-opacity duration-100 focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset group-hover/queue-row:opacity-100 motion-reduce:transition-none pointer-coarse:opacity-100"
         >
           <CheckCheckIcon aria-hidden className="size-3" />
           <T>Clear</T>

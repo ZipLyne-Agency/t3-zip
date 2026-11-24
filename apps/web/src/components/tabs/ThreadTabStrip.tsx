@@ -81,7 +81,7 @@ export function ThreadTabStrip(props: {
   readonly newThreadShortcut: string | null;
 }) {
   const { tabs, pinnedCount, activeKey, nowMs, onOpen } = props;
-  const { settleThread } = useThreadActions();
+  const { settleThread, confirmSettle } = useThreadActions();
   const { formatTime } = useThreadMuteActions();
   const gt = useGT();
   const resolve = useMessages();
@@ -152,6 +152,8 @@ export function ThreadTabStrip(props: {
       const session = useComposerDraftStore.getState().getDraftSession(tab.draftId);
       if (!session || session.promotedTo) return;
     }
+    // Ask before moving to the next tab, so Cancel leaves you where you were.
+    if (tab.kind !== "draft" && !(await confirmSettle([tab.ref]))) return;
     const wasOpen = tab.key === activeKey;
     if (wasOpen) {
       const nextKey = tabAfterClose(
@@ -168,7 +170,10 @@ export function ThreadTabStrip(props: {
     // Undo (mod+z or the sidebar's Undo) brings the tab back, and reopens it if it was open.
     reportThreadActionFailure(
       m(msg("Failed to settle thread")),
-      await settleThread(tab.ref, wasOpen ? { onUndone: () => onOpen(tab) } : undefined),
+      await settleThread(tab.ref, {
+        automationsConfirmed: true,
+        ...(wasOpen ? { onUndone: () => onOpen(tab) } : {}),
+      }),
     );
   };
 

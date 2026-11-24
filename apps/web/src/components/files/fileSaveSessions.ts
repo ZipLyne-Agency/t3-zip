@@ -8,6 +8,7 @@ import { environmentSession, readEnvironmentScope, sessionHasScope } from "~/sta
 
 import { FileSaveCoordinator } from "./fileSaveCoordinator";
 import {
+  clearProjectFileQueryData,
   confirmProjectFileQueryData,
   getUnsavedProjectFileQueryData,
 } from "./projectFilesQueryState";
@@ -34,6 +35,7 @@ export interface FileSaveSessionDeps {
 }
 
 interface FileSaveSession {
+  readonly target: FileSaveTarget;
   readonly coordinator: FileSaveCoordinator;
   /** Lease count per listener; surfaces may share one listener. */
   readonly listeners: Map<FilePendingListener, number>;
@@ -84,6 +86,7 @@ export function createFileSaveSessions(deps: FileSaveSessionDeps) {
     });
     const unsubscribeWritable = deps.subscribeWritable(target, () => recover(target, coordinator));
     const session: FileSaveSession = {
+      target,
       coordinator,
       listeners,
       unsubscribeWritable,
@@ -121,9 +124,33 @@ export function createFileSaveSessions(deps: FileSaveSessionDeps) {
     };
   };
 
+  // T3 Zip: the sessions of a renamed or deleted entry, a folder's files included.
+  const sessionsUnder = ({ environmentId, cwd, relativePath }: FileSaveTarget) =>
+    [...sessions.entries()].filter(
+      ([, { target }]) =>
+        target.environmentId === environmentId &&
+        target.cwd === cwd &&
+        (target.relativePath === relativePath ||
+          target.relativePath.startsWith(`${relativePath}/`)),
+    );
+
   return {
     /** Holds the file's session open until the returned release runs. */
     acquire,
+    /** T3 Zip: writes every draft under the path now; false when one could not be saved. */
+    async flushUnder(target: FileSaveTarget): Promise<boolean> {
+      const matched = sessionsUnder(target).map(([, session]) => session);
+      await Promise.all(matched.map((session) => session.coordinator.flushAndSettle()));
+      return matched.every((session) => session.coordinator.unconfirmedContents === null);
+    },
+    /** T3 Zip: drops every draft under the path; returns the files whose drafts were dropped. */
+    async discardUnder(target: FileSaveTarget): Promise<string[]> {
+      const matched = sessionsUnder(target);
+      // A file created again under the same name starts a fresh session.
+      for (const [key] of matched) sessions.delete(key);
+      await Promise.all(matched.map(([, session]) => session.coordinator.discard()));
+      return matched.map(([, session]) => session.target.relativePath);
+    },
     /** Edits for a file nobody holds open are dropped, so retired editors stay inert. */
     change(target: FileSaveTarget, contents: string): void {
       const session = sessions.get(fileSaveKey(target));
@@ -175,4 +202,17 @@ export function useFileSaveSession(
 
 export function changeFileSaveSession(target: FileSaveTarget, contents: string): void {
   fileSaveSessions.change(target, contents);
+}
+
+/** T3 Zip: saves unsaved edits under a path before it is renamed; false when one failed. */
+export function flushFileSaveSessions(target: FileSaveTarget): Promise<boolean> {
+  return fileSaveSessions.flushUnder(target);
+}
+
+/** T3 Zip: drops unsaved edits under a path before it is deleted, so nothing writes it back. */
+export async function discardFileSaveSessions(target: FileSaveTarget): Promise<void> {
+  const paths = await fileSaveSessions.discardUnder(target);
+  for (const relativePath of new Set([target.relativePath, ...paths])) {
+    clearProjectFileQueryData(target.environmentId, target.cwd, relativePath);
+  }
 }

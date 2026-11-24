@@ -1,11 +1,14 @@
 import { thrownErrorMessage } from "@t3tools/client-runtime/errors";
+import { contextMenuSourceOf } from "../../contextMenuSource";
 import { m } from "~/i18n/messages";
 import { RefreshIcon } from "~/components/ui/refresh-icon";
-import type {
-  ContextMenuItem as TreeContextMenuItem,
-  ContextMenuOpenContext as TreeContextMenuOpenContext,
+import {
+  FILE_TREE_TAG_NAME,
+  type ContextMenuItem as TreeContextMenuItem,
+  type ContextMenuOpenContext as TreeContextMenuOpenContext,
+  type FileTree as FileTreeModel,
 } from "@pierre/trees";
-import type { EnvironmentId, ProjectEntry } from "@t3tools/contracts";
+import type { ContextMenuSource, EnvironmentId, ProjectEntry } from "@t3tools/contracts";
 import { FileTree, useFileTree, useFileTreeSearch, useFileTreeSelector } from "@pierre/trees/react";
 import { settlePromise } from "@t3tools/client-runtime/state/runtime";
 import { serializeComposerFileLink } from "@t3tools/shared/composerTrigger";
@@ -13,7 +16,15 @@ import * as AsyncResult from "effect/reactivity/AsyncResult";
 import * as Cause from "effect/Cause";
 import { T, useGT, useMessages } from "gt-react";
 import { ChevronsDownUpIcon, ChevronsUpDownIcon } from "lucide-react";
-import { type Ref, useEffect, useEffectEvent, useRef, useState } from "react";
+import {
+  type MouseEvent,
+  type Ref,
+  useEffect,
+  useEffectEvent,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
 
 import { Button } from "~/components/ui/button";
 import { InputGroup, InputGroupInput } from "~/components/ui/input-group";
@@ -43,6 +54,9 @@ import {
   writeExpandedDirectories,
 } from "./fileTreeExpansion";
 import { buildFileTreePathUpdates, shouldRebuildFileTree } from "./fileTreePathReconciliation";
+import { type FileTreeEntryChange, newEntryFolder } from "./fileTreeCreate";
+import { useFileTreeCreate } from "./useFileTreeCreate";
+import { useFileTreeDelete } from "./useFileTreeDelete";
 import { loadFileAncestors } from "./loadFileAncestors";
 import { useDirectoryEntries } from "./useDirectoryEntries";
 import { useProjectPathSearch } from "~/state/queries";
@@ -62,6 +76,8 @@ interface FileBrowserPanelProps {
   onRefreshSelectedFile?: () => void;
   workspaceMutationId: string | null;
   answersPanelFind?: boolean;
+  /** T3 Zip: a rename or delete from this panel, so the open preview can follow it. */
+  onEntryChanged?: (change: FileTreeEntryChange) => void;
 }
 
 function treePath(entry: ProjectEntry): string {
@@ -104,9 +120,11 @@ function FileSearchField({
   const gt = useGT();
   return (
     <InputGroup variant="ghost" className="h-7 min-w-0 flex-1">
+      {/* Native search inputs clear on Escape even during IME composition. */}
       <InputGroupInput
         ref={ref}
-        type="search"
+        type="text"
+        role="searchbox"
         name={props.name}
         size="sm"
         value={props.value}
@@ -116,7 +134,9 @@ function FileSearchField({
         spellCheck={false}
         onChange={(event) => props.onValueChange(event.target.value)}
         onKeyDown={(event) => {
-          if (event.key !== "Escape") return;
+          if (event.key !== "Escape" || event.nativeEvent.isComposing || event.keyCode === 229)
+            return;
+          if (props.value) event.stopPropagation();
           props.onClose();
           event.currentTarget.blur();
         }}
@@ -166,6 +186,7 @@ export default function FileBrowserPanel({
   workspaceMutationId,
   hostFolder = false,
   answersPanelFind = false,
+  onEntryChanged,
 }: FileBrowserPanelProps) {
   const panelPath = (relativePath: string) =>
     hostFolder ? joinHostPath(cwd, relativePath) : relativePath;
@@ -203,7 +224,57 @@ export default function FileBrowserPanel({
   const followedRevealRef = useRef<string | null>(null);
 
   // Shadow-DOM row rects are unreliable; capture the composed contextmenu event's viewport position.
-  const contextMenuPointerRef = useRef<{ x: number; y: number; at: number } | null>(null);
+  const contextMenuPointerRef = useRef<{
+    x: number;
+    y: number;
+    at: number;
+    source: ContextMenuSource;
+  } | null>(null);
+  // T3 Zip: New File, New Folder, Paste as New File, Rename and Delete.
+  const panelRef = useRef<HTMLDivElement>(null);
+  const modelRef = useRef<FileTreeModel | null>(null);
+  const entryChanged = (change: FileTreeEntryChange) => onEntryChanged?.(change);
+  const create = useFileTreeCreate({
+    environmentId,
+    cwd,
+    disabled: hostFolder,
+    containerRef: panelRef,
+    modelRef,
+    loadFolder: load,
+    onOpenFile: (relativePath) => onOpenFile(panelPath(relativePath)),
+    onEntryChanged: entryChanged,
+  });
+  const remove = useFileTreeDelete({
+    environmentId,
+    cwd,
+    disabled: hostFolder,
+    modelRef,
+    loadFolder: load,
+    onEntryChanged: entryChanged,
+  });
+  const showEmptySpaceContextMenu = (event: MouseEvent<HTMLDivElement>) => {
+    if (event.defaultPrevented) return;
+    const path = event.nativeEvent.composedPath();
+    const onTree = path.some(
+      (node) => node instanceof Element && node.localName === FILE_TREE_TAG_NAME,
+    );
+    const onRowOrField = path.some(
+      (node) =>
+        node instanceof Element &&
+        node.matches('[role="treeitem"], input, textarea, [contenteditable]'),
+    );
+    const api = readLocalApi();
+    const items = create.menuItems();
+    if (!onTree || onRowOrField || !api || items.length === 0) return;
+    event.preventDefault();
+    const position = { x: event.clientX, y: event.clientY };
+    void settlePromise(async () => {
+      const clicked = await api.contextMenu.show(items, position);
+      if (clicked !== null && create.isCreateAction(clicked)) await create.startAction(clicked, "");
+    }).then((result) => {
+      if (!AsyncResult.isSuccess(result)) throw Cause.squash(result.cause);
+    });
+  };
 
   const showEntryContextMenu = useStableCallback(
     (item: TreeContextMenuItem, context: TreeContextMenuOpenContext) => {
@@ -222,18 +293,46 @@ export default function FileBrowserPanel({
         : { x: anchorRect.left, y: anchorRect.bottom };
       const fileTarget = { environmentId, filePath: relativePath, workspaceRoot: cwd };
       const fileMenuItems = fileContextMenu.buildItems(fileTarget);
+      const createMenuItems = create.menuItems();
+      const changeMenuItems = [
+        ...(create.canRenameEntries ? [{ id: "rename-entry", label: gt("Rename") }] : []),
+        ...(remove.menuItem ? [remove.menuItem] : []),
+      ];
+      // Each group after the first starts with a separator.
+      const menuGroups = [
+        createMenuItems,
+        changeMenuItems,
+        [
+          ...fileMenuItems,
+          { id: "copy-mention", label: gt("Copy mention") },
+          { id: "add-to-chat", label: gt("Add to chat") },
+        ],
+      ].filter((group) => group.length > 0);
       // The app menu owns focus; the tree's outside-click handler would dismiss it before click.
       context.close({ restoreFocus: !pointerIsFresh });
       void settlePromise(async () => {
         const clicked = await api.contextMenu.show(
-          [
-            ...fileMenuItems,
-            { id: "copy-mention", label: gt("Copy mention") },
-            { id: "add-to-chat", label: gt("Add to chat") },
-          ],
+          menuGroups.flatMap((group, groupIndex) =>
+            group.map((entry, index) =>
+              index === 0 && groupIndex > 0 ? { ...entry, separatorBefore: true } : entry,
+            ),
+          ),
           position,
+          pointerIsFresh ? pointer.source : undefined,
         );
         if (clicked === null) return;
+        if (create.isCreateAction(clicked)) {
+          await create.startAction(clicked, newEntryFolder(item.path));
+          return;
+        }
+        if (clicked === "rename-entry") {
+          create.startRename(item.path);
+          return;
+        }
+        if (clicked === "delete-entry") {
+          remove.request(item.path);
+          return;
+        }
         // Open-with submenu ids are absent from the top-level item list.
         const isFileMenuAction =
           fileMenuItems.some((entry) => entry.id === clicked) || clicked.startsWith("editor:");
@@ -311,16 +410,22 @@ export default function FileBrowserPanel({
       }
     },
     paths: [],
+    renaming: create.renaming,
     renderRowDecoration: ({ item, row }) =>
-      row.kind === "directory" &&
+      create.decorationFor(item.path) ??
+      (row.kind === "directory" &&
       row.isExpanded &&
       loadingDirectoriesRef.current.has(item.path.replace(/\/$/, ""))
         ? { icon: "t3-tree-icon-loading", title: gt("Loading…") }
-        : null,
+        : null),
     search: false,
     onSearchChange: (value) => setQuery(value ?? ""),
     unsafeCSS: PIERRE_TREE_UNSAFE_CSS,
   });
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- hands the Pierre model to the create actions, which run from menus and key handlers after commit
+  useLayoutEffect(() => {
+    modelRef.current = model;
+  }, [model]);
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- makes the Pierre tree model re-render row decorations when loading directories change
   useEffect(() => {
     if (loadingDirectoriesRef.current === loadingDirectories) return;
@@ -456,7 +561,12 @@ export default function FileBrowserPanel({
       model.resetPaths(treePaths);
       return;
     }
-    const updates = buildFileTreePathUpdates(previousTreePaths, treePaths);
+    // A new, renamed or deleted entry is already in place before the refreshed listing says so.
+    const updates = buildFileTreePathUpdates(previousTreePaths, treePaths).filter((update) =>
+      update.type === "add"
+        ? !model.getItem(update.path)
+        : update.type !== "remove" || Boolean(model.getItem(update.path)),
+    );
     if (shouldRebuildFileTree(previousTreePaths, treePaths, updates)) {
       // A reset keeps old search matches, so search closes first and recomputes afterwards.
       const activeSearch = model.isSearchOpen() ? model.getSearchValue() : null;
@@ -547,11 +657,21 @@ export default function FileBrowserPanel({
 
   return (
     <div
+      ref={panelRef}
       className="flex min-h-0 flex-1 flex-col bg-background"
       data-file-browser-panel={`${environmentId}:${cwd}`}
+      onContextMenu={showEmptySpaceContextMenu}
+      onKeyDownCapture={create.handlers.onKeyDownCapture}
+      onInputCapture={create.handlers.onInputCapture}
+      onBlurCapture={create.handlers.onBlurCapture}
       // Capture runs before the tree's shadow-internal row handler opens the menu.
       onContextMenuCapture={(event) => {
-        contextMenuPointerRef.current = { x: event.clientX, y: event.clientY, at: event.timeStamp };
+        contextMenuPointerRef.current = {
+          x: event.clientX,
+          y: event.clientY,
+          at: event.timeStamp,
+          source: contextMenuSourceOf(event),
+        };
       }}
       // Capture dragstart before the tree selects the row so selection sees the drag flag.
       onDragStartCapture={(event) => dragMention.handleDragStart(event.nativeEvent)}
@@ -649,10 +769,40 @@ export default function FileBrowserPanel({
           model={model}
           aria-label={gt("{projectName} files", { projectName })}
           className="min-h-0 flex-1 overflow-hidden"
+          onClickCapture={(event) => {
+            if (
+              event.defaultPrevented ||
+              event.button !== 0 ||
+              event.ctrlKey ||
+              event.metaKey ||
+              event.shiftKey ||
+              event.altKey ||
+              dragMention.isDragInProgress()
+            ) {
+              return;
+            }
+            // Pierre emits no change for its sole selected row; read before the click to avoid double opens.
+            const selected = model.getSelectedPaths();
+            const path = selected.length === 1 ? selected[0] : undefined;
+            if (!path || entryKindsRef.current.get(path) !== "file") return;
+            const clickedSelectedRow = event.nativeEvent
+              .composedPath()
+              .some(
+                (node) =>
+                  node instanceof HTMLElement && node.getAttribute("data-item-path") === path,
+              );
+            if (!clickedSelectedRow) return;
+            treeSelectionPathRef.current = path;
+            onOpenFile(panelPath(path));
+          }}
           style={pierreTreeStyle(resolvedTheme)}
           onPointerOver={titleClippedPierreTreeRow}
         />
       )}
+      <div role="alert" className="sr-only">
+        {create.errorText}
+      </div>
+      {remove.dialog}
     </div>
   );
 }

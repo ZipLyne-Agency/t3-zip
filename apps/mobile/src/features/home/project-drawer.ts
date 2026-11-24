@@ -14,6 +14,9 @@ import {
   moveRailFolder,
   moveRailProject,
   nextProjectRailEditTime,
+  railProjectAway,
+  railProjectKeysForMembers,
+  railProjectReturn,
   railFolderEntry,
   railProjectEntry,
   railStepPlacement,
@@ -21,15 +24,18 @@ import {
   removeRailProjectKey,
   renameRailFolder,
   sameSharedProjectRail,
+  searchRailProjects,
   sharedProjectRailContentFromLocal,
   type LocalProjectRail,
+  type RailProjectAway,
   type RailRowEntry,
   type SharedProjectRail,
 } from "@t3tools/client-runtime/state/project-rail";
 
 import type { ProjectSwitcherRow } from "./project-switcher";
 
-export type { SharedProjectRail };
+export type { RailProjectAway, SharedProjectRail };
+export { railProjectAway, railProjectKeysForMembers, searchRailProjects };
 
 /**
  * "Until I wake it": a wake time so far ahead it never arrives, the value the desktop writes
@@ -181,30 +187,29 @@ export function buildProjectDrawerModel(input: {
   };
 }
 
-/**
- * The items the list shows. Without a query a folded folder hides its projects. A query
- * matches project names across folders and keeps each match's folder name above it.
- */
+/** The items the list shows: a folded folder hides its projects. */
 export function visibleProjectDrawerItems(
   items: ReadonlyArray<ProjectDrawerItem>,
-  query: string,
 ): ProjectDrawerItem[] {
-  const needle = query.trim().toLocaleLowerCase();
-  if (needle === "") {
-    const folded = new Set(
-      items.flatMap((item) => (item.kind === "folder" && item.collapsed ? [item.folderId] : [])),
-    );
-    return items.filter(
-      (item) => item.kind === "folder" || item.folderId === null || !folded.has(item.folderId),
-    );
-  }
-  const matches = (item: ProjectDrawerItem) =>
-    item.kind === "project" && item.row.title.toLocaleLowerCase().includes(needle);
-  const foldersWithMatches = new Set(
-    items.flatMap((item) => (matches(item) && item.kind === "project" ? [item.folderId] : [])),
+  const folded = new Set(
+    items.flatMap((item) => (item.kind === "folder" && item.collapsed ? [item.folderId] : [])),
   );
-  return items.filter((item) =>
-    item.kind === "folder" ? foldersWithMatches.has(item.folderId) : matches(item),
+  return items.filter(
+    (item) => item.kind === "folder" || item.folderId === null || !folded.has(item.folderId),
+  );
+}
+
+/**
+ * Favorites Only, as the desktop rail's star shows it: the favorite projects in rail order,
+ * folded folders included, without folder headings and without moving.
+ */
+export function favoriteProjectDrawerItems(
+  items: ReadonlyArray<ProjectDrawerItem>,
+): ProjectDrawerItem[] {
+  return items.flatMap((item) =>
+    item.kind === "project" && item.favorite
+      ? [{ ...item, canMoveUp: false, canMoveDown: false }]
+      : [],
   );
 }
 
@@ -264,7 +269,7 @@ function folderOf(entries: ReadonlyArray<RailRowEntry>, projectKey: string) {
 }
 
 /** One change on the device's rail, by the desktop rail's rules (`ProjectRail.tsx` actions). */
-export function applyProjectRailChange(
+function applyProjectRailChange(
   local: LocalProjectRail,
   change: ProjectRailChange,
   context: ProjectRailChangeContext,
@@ -398,10 +403,14 @@ export function projectsToBringBack(
   rail: SharedProjectRail,
   sentProjectKeys: ReadonlyArray<string>,
 ): ProjectRailChange[] {
-  return [...new Set(sentProjectKeys)].flatMap((projectKey): ProjectRailChange[] => [
-    ...(rail.hiddenProjects.includes(projectKey) ? [{ kind: "show" as const, projectKey }] : []),
-    ...(projectKey in rail.snoozedProjects ? [{ kind: "wake" as const, projectKey }] : []),
-  ]);
+  return [...new Set(sentProjectKeys)].flatMap((projectKey): ProjectRailChange[] => {
+    const back = railProjectReturn(rail, projectKey);
+    if (back === null) return [];
+    return [
+      ...(back.show ? [{ kind: "show" as const, projectKey }] : []),
+      ...(back.wake ? [{ kind: "wake" as const, projectKey }] : []),
+    ];
+  });
 }
 
 /** One environment's shared rail, as its settings hold it. */

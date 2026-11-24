@@ -101,8 +101,29 @@ export function resolveDoneSection(
   return null;
 }
 
-/** Every thread, the ones waiting on you (or failed), the running ones, or the finished ones. */
-export type ThreadStatusFilter = "all" | "waiting" | "working" | "done";
+/**
+ * Every thread, the ones waiting on you (or failed), the running ones, the finished ones, or the
+ * running and finished ones together, the single tab thread lists show in their place.
+ */
+export type ThreadStatusFilter = "all" | "waiting" | "working" | "done" | "workingDone";
+
+/**
+ * The tabs a list shows, in order. Thread lists combine Working and Done into one tab in every
+ * scope, since switching between them is constant; the desktop rail's own queue, shown when the
+ * thread list is closed, keeps them apart.
+ */
+export function threadStatusFilters(combined: boolean): ReadonlyArray<ThreadStatusFilter> {
+  return combined ? ["all", "waiting", "workingDone"] : ["all", "waiting", "working", "done"];
+}
+
+/** Moves a filter onto a tab the list shows: Working or Done fold into the combined tab and back. */
+export function normalizeThreadStatusFilter(
+  filter: ThreadStatusFilter,
+  combined: boolean,
+): ThreadStatusFilter {
+  if (combined) return filter === "working" || filter === "done" ? "workingDone" : filter;
+  return filter === "workingDone" ? "working" : filter;
+}
 
 /** Waiting is needs you or failed; Done keeps a finished thread until it is cleared. */
 export function matchesThreadStatusFilter(
@@ -118,10 +139,13 @@ export function matchesThreadStatusFilter(
       return item.status === "working";
     case "done":
       return item.doneSection !== null;
+    case "workingDone":
+      return item.status === "working" || item.doneSection !== null;
   }
 }
 
-export type ThreadStatusFilterCounts = Record<Exclude<ThreadStatusFilter, "all">, number>;
+/** Counts per tab; the combined tab shows the Working and Done counts side by side. */
+export type ThreadStatusFilterCounts = Record<"waiting" | "working" | "done", number>;
 
 /** How many threads each filter lists; a thread counts once, in the first filter it matches. */
 export function countThreadStatusFilters(

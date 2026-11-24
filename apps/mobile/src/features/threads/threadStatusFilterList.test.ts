@@ -1,5 +1,6 @@
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
-import { EnvironmentId, ProviderInstanceId, RunId, ThreadId } from "@t3tools/contracts";
+import type { EnvironmentProject } from "@t3tools/client-runtime/state/shell";
+import { EnvironmentId, ProjectId, ProviderInstanceId, RunId, ThreadId } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import { makeThreadShellFixture } from "../../test-fixtures";
@@ -7,6 +8,7 @@ import type { ThreadListV2ListItem } from "./threadListV2";
 import {
   applyClearMarks,
   buildThreadStatusEntries,
+  buildThreadStatusFilterRows,
   buildThreadStatusListItems,
   countThreadStatusEntries,
   pruneClearMarks,
@@ -65,7 +67,9 @@ const titles = (items: ReadonlyArray<ThreadListV2ListItem>) =>
       ? `${item.item.thread.title}${item.doneSection ? `@${item.doneSection}` : ""}`
       : item.type === "v2-status-section"
         ? `[${item.section} ${item.count}/${item.clearAllCount}]`
-        : item.type,
+        : item.type === "v2-status-project"
+          ? `<${item.title ?? "?"} ${item.count}>`
+          : item.type,
   );
 
 const decorate = (items: ReadonlyArray<{ readonly thread: EnvironmentThreadShell }>) =>
@@ -139,6 +143,118 @@ describe("buildThreadStatusEntries", () => {
     expect(threadStatusDoneThreads(entries).map((entry) => entry.thread.title)).toEqual([
       "new-recent",
     ]);
+  });
+});
+
+describe("Working · Done", () => {
+  const threads = [
+    thread("running", { runtime: runtime("running"), latestRun: completedRun("running", 50) }),
+    unseen("new-recent", 2),
+    opened("opened", 15),
+    thread("asks", { hasPendingUserInput: true, pendingUserInputAt: at(30) }),
+  ];
+  const clears = { reviewSince: at(120), clearedAt: {} };
+  const pendingRows = () => [
+    { type: "v2-pending", key: "draft" } as unknown as ThreadListV2ListItem,
+  ];
+
+  it("keeps Done above and Working below as two lists, drafts leading Working", () => {
+    const entries = buildThreadStatusEntries({ threads, now: NOW, clears });
+    const rows = buildThreadStatusFilterRows({
+      entries,
+      filter: "workingDone",
+      now: NOW,
+      decorate,
+      projectGroups: null,
+      pendingRows,
+    });
+    expect(rows.split && titles(rows.split.done)).toEqual([
+      "[new 1/2]",
+      "new-recent@new",
+      "[opened 1/0]",
+      "opened@opened",
+    ]);
+    expect(rows.split && titles(rows.split.working)).toEqual(["v2-pending", "running"]);
+    expect(rows.items).toEqual([...rows.split!.done, ...rows.split!.working]);
+  });
+
+  it("lists one tab as one list", () => {
+    const entries = buildThreadStatusEntries({ threads, now: NOW, clears });
+    const rows = buildThreadStatusFilterRows({
+      entries,
+      filter: "working",
+      now: NOW,
+      decorate,
+      projectGroups: null,
+      pendingRows,
+    });
+    expect(rows.split).toBeNull();
+    expect(titles(rows.items)).toEqual(["v2-pending", "running"]);
+  });
+});
+
+describe("Done by project", () => {
+  const project = (id: string) => ProjectId.make(id);
+  const inProject = (projectId: string, make: typeof unseen, id: string, minutesAgo: number) => ({
+    ...make(id, minutesAgo),
+    projectId: project(projectId),
+  });
+  const threads = [
+    inProject("alpha", unseen, "alpha-old", 50),
+    inProject("beta", unseen, "beta-new", 5),
+    inProject("alpha", unseen, "alpha-new", 10),
+    inProject("gone", unseen, "gone-new", 20),
+    inProject("beta", opened, "beta-opened", 30),
+    inProject("alpha", opened, "alpha-opened", 15),
+  ];
+  const clears = { reviewSince: at(120), clearedAt: {} };
+  const group = (key: string, title: string) => ({
+    key,
+    title,
+    project: { id: project(key), environmentId, title } as unknown as EnvironmentProject,
+    scratch: false,
+  });
+  const projectGroups = new Map([
+    [`${environmentId}:alpha`, group("alpha", "Alpha")],
+    [`${environmentId}:beta`, group("beta", "Beta")],
+  ]);
+
+  it("lists each heading's threads under their projects, newest project first", () => {
+    const entries = buildThreadStatusEntries({ threads, now: NOW, clears });
+    const items = buildThreadStatusListItems({
+      entries,
+      filter: "done",
+      now: NOW,
+      decorate,
+      projectGroups,
+    });
+    expect(titles(items)).toEqual([
+      "[new 4/6]",
+      "<Beta 1>",
+      "beta-new@new",
+      "<Alpha 2>",
+      "alpha-new@new",
+      "alpha-old@new",
+      "<? 1>",
+      "gone-new@new",
+      "[opened 2/0]",
+      "<Alpha 1>",
+      "alpha-opened@opened",
+      "<Beta 1>",
+      "beta-opened@opened",
+    ]);
+    const lastRows = items.flatMap((item) =>
+      item.type === "v2-thread" && item.item.isLast ? [item.item.thread.title] : [],
+    );
+    expect(lastRows).toEqual(["beta-opened"]);
+    const keys = items.map((item) => item.key);
+    expect(new Set(keys).size).toBe(keys.length);
+  });
+
+  it("keeps one list when no project groups are given", () => {
+    const entries = buildThreadStatusEntries({ threads, now: NOW, clears });
+    const items = buildThreadStatusListItems({ entries, filter: "done", now: NOW, decorate });
+    expect(items.some((item) => item.type === "v2-status-project")).toBe(false);
   });
 });
 

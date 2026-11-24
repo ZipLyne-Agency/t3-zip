@@ -35,7 +35,7 @@ vi.mock(import("~/rpc/requestLatencyState"), async (original) => ({
   trackRpcRequestSent: () => {},
 }));
 
-it("searches threads from the rail as the classic sidebar does", async () => {
+it("searches projects and threads from the rail, threads as the classic sidebar does", async () => {
   const [first, second] = [threadWithHistory("thread-a", 1), threadWithHistory("thread-b", 1)];
   using _environment = installFakeEnvironment([first, second]);
   __setClientSettingsForTests({
@@ -50,11 +50,14 @@ it("searches threads from the rail as the classic sidebar does", async () => {
   await router.load();
   await using _app = await render(<AppRoot router={router} />, { router: false });
 
-  const search = page.getByRole("combobox", { name: "Search threads" });
+  const search = page.getByRole("combobox", { name: "Search projects and threads" });
   await expect.element(search).toBeVisible();
   await userEvent.fill(search, "thread-b");
-  const results = page.getByRole("listbox", { name: "Thread search results" });
-  await expect.element(results.getByText(`Thread ${second.id}`)).toBeVisible();
+  const results = page.getByRole("listbox", { name: "Search results" });
+  const threads = results.getByRole("group", { name: /^Threads/ });
+  await expect.element(threads.getByText(`Thread ${second.id}`)).toBeVisible();
+  // No project is named like the thread, so Threads is the only section.
+  await expect.element(results.getByRole("group", { name: /^Projects/ })).not.toBeInTheDocument();
   // The thread view focuses its composer once it loads; return to the search field first.
   await userEvent.click(search);
   await userEvent.keyboard("{Enter}");
@@ -63,6 +66,15 @@ it("searches threads from the rail as the classic sidebar does", async () => {
   );
   // Opening a result clears the search, so the projects come back.
   await expect.element(results).not.toBeInTheDocument();
+  await expect.element(search).toHaveValue("");
+
+  // A project's name lists it under Projects, above the threads.
+  await userEvent.click(search);
+  await userEvent.fill(search, "render");
+  await expect
+    .element(results.getByRole("group", { name: /^Projects/ }).getByText("render"))
+    .toBeVisible();
+  await userEvent.keyboard("{Escape}");
   await expect.element(search).toHaveValue("");
 });
 

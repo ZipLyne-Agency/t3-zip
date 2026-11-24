@@ -103,6 +103,32 @@ describe("rightPanelStore", () => {
     expect(useClosedViewStore.getState().entries).toEqual([]);
   });
 
+  it("moves file tabs with a renamed folder and closes deleted ones", () => {
+    const store = useRightPanelStore.getState();
+    store.openFile(refA, "notes/plan.md");
+    store.openFile(refA, "readme.md");
+    store.openFile(refA, "notes/todo.md");
+    const ids = () =>
+      selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA).surfaces.map(
+        (surface) => surface.id,
+      );
+
+    store.followFileEntryChange(refA, (path) =>
+      path.startsWith("notes/") ? `meetings/${path.slice("notes/".length)}` : undefined,
+    );
+    expect(ids()).toEqual(["file:meetings/plan.md", "file:readme.md", "file:meetings/todo.md"]);
+    expect(selectActiveRightPanelSurface(useRightPanelStore.getState().byThreadKey, refA)?.id).toBe(
+      "file:meetings/todo.md",
+    );
+
+    store.followFileEntryChange(refA, (path) => (path.startsWith("meetings/") ? null : undefined));
+    // The deleted active tab becomes the explorer; the other deleted tab closes.
+    expect(ids()).toEqual(["file:readme.md", "files"]);
+    expect(selectActiveRightPanelSurface(useRightPanelStore.getState().byThreadKey, refA)?.id).toBe(
+      "files",
+    );
+  });
+
   it("ignores session tabs without browser snapshots and records the empty browser tab", () => {
     const store = useRightPanelStore.getState();
     store.openBrowser(refA, "tab-1");

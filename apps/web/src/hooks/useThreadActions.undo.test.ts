@@ -52,6 +52,8 @@ vi.mock("./useHandleNewThread", () => ({
     router.state.location.href = "/draft/project";
   },
 }));
+// No automation warning here; the gate has its own tests in client-runtime.
+vi.mock("../settleAutomationGate", () => ({ confirmSettleWithAutomations: async () => true }));
 vi.mock("../composerDraftStore", () => ({ useComposerDraftStore: () => vi.fn() }));
 vi.mock("../lib/composerDraftUploads", () => ({ releaseComposerDraftUploads: vi.fn() }));
 vi.mock("../terminalUiStateStore", () => ({ useTerminalUiStateStore: () => vi.fn() }));

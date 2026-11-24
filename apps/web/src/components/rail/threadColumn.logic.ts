@@ -1,11 +1,13 @@
 import {
   countThreadStatusFilters,
   matchesThreadStatusFilter,
+  normalizeThreadStatusFilter,
+  type ThreadStatusFilter,
+  type ThreadStatusFilterCounts,
 } from "@t3tools/client-runtime/state/thread-status-filter";
 import { msg } from "gt-react";
 
 import { m, type MessageResolver } from "../../i18n/messages";
-import type { RailFilter } from "./railStore";
 import type { DoneSection, OpenThreadStatus } from "./railStatus.logic";
 import {
   resolveThreadSidebarMinimumWidth,
@@ -100,17 +102,28 @@ export interface ThreadColumnSection<T> {
   readonly items: T[];
 }
 
-function matchesRailFilter(
-  item: Pick<ThreadColumnItem, "status" | "doneSection">,
-  filter: RailFilter,
-): boolean {
-  return matchesThreadStatusFilter(item, filter);
-}
+/** A filter one list shows; the combined Working and Done tab shows two, one per half. */
+type ThreadColumnListFilter = Exclude<ThreadStatusFilter, "workingDone">;
 
 export function countThreadColumnFilters(
   items: ReadonlyArray<Pick<ThreadColumnItem, "kind" | "status" | "doneSection">>,
-): Record<Exclude<RailFilter, "all">, number> {
+): ThreadStatusFilterCounts {
   return countThreadStatusFilters(items.filter((item) => item.kind === "thread"));
+}
+
+/**
+ * The filter the column shows. A filter belongs to the scope it was picked in; any other scope
+ * opens on All, and All Projects, which has no All tab, on Waiting. The result is always a tab
+ * the column shows: every scope combines Working and Done into one tab.
+ */
+export function resolveThreadColumnFilter(input: {
+  readonly picked: { readonly scope: string; readonly filter: ThreadStatusFilter };
+  readonly scope: string;
+}): ThreadStatusFilter {
+  const allScope = input.scope === ALL_PROJECTS_SCOPE;
+  const picked = input.picked.scope === input.scope ? input.picked.filter : "all";
+  const filter = allScope && picked === "all" ? "waiting" : picked;
+  return normalizeThreadStatusFilter(filter, true);
 }
 
 function startOfLocalDay(ms: number): number {
@@ -127,7 +140,7 @@ function startOfLocalDay(ms: number): number {
  */
 export function buildThreadColumnSections<T extends ThreadColumnItem>(
   items: readonly T[],
-  filter: RailFilter,
+  filter: ThreadColumnListFilter,
   nowMs: number,
 ): ThreadColumnSection<T>[] {
   const today = startOfLocalDay(nowMs);
@@ -149,7 +162,7 @@ export function buildThreadColumnSections<T extends ThreadColumnItem>(
       buckets.drafts.push(item);
       continue;
     }
-    if (!matchesRailFilter(item, filter)) continue;
+    if (!matchesThreadStatusFilter(item, filter)) continue;
     // Done splits by whether you have opened the thread; the other lists sort by day.
     if (filter === "done") buckets[item.doneSection ?? "new"].push(item);
     else if (item.status === "needs" || item.status === "failed") buckets.needs.push(item);
@@ -176,6 +189,24 @@ export function buildThreadColumnSections<T extends ThreadColumnItem>(
   });
 }
 
+/**
+ * The combined Working and Done tab: Done on top (New, then Opened), Working below. Drafts list
+ * once, in the Working half after the running threads, since the half's own heading names them.
+ */
+export function buildWorkingDoneHalves<T extends ThreadColumnItem>(
+  items: readonly T[],
+  nowMs: number,
+): { readonly done: ThreadColumnSection<T>[]; readonly working: ThreadColumnSection<T>[] } {
+  const working = buildThreadColumnSections(items, "working", nowMs);
+  return {
+    done: buildThreadColumnSections(items, "done", nowMs).filter(({ id }) => id !== "drafts"),
+    working: [
+      ...working.filter(({ id }) => id !== "drafts"),
+      ...working.filter(({ id }) => id === "drafts"),
+    ],
+  };
+}
+
 export interface ThreadColumnProjectGroup<T> {
   readonly projectKey: string;
   readonly items: T[];
@@ -195,6 +226,35 @@ export function groupThreadColumnItemsByProject<T extends { readonly projectKey:
     else groups.set(item.projectKey, [item]);
   }
   return [...groups].map(([projectKey, list]) => ({ projectKey, items: list }));
+}
+
+/** Whether the open thread listed under Drafts when it was opened. */
+export interface OpenThreadDraftLatch {
+  readonly key: string | null;
+  readonly hasDraft: boolean;
+}
+
+/**
+ * Which threads list under Drafts: every thread with unsent text, open or not, so clicking a row
+ * never moves it. The open thread keeps the place it was opened in until another opens, so typing
+ * or sending does not move it either. Pass back the latch; it is stable while the route is.
+ */
+export function resolveColumnDraftedKeys(
+  unsentKeys: ReadonlySet<string>,
+  routeKey: string | null,
+  latch: OpenThreadDraftLatch | null,
+): { readonly draftedKeys: ReadonlySet<string>; readonly latch: OpenThreadDraftLatch } {
+  const next =
+    latch !== null && latch.key === routeKey
+      ? latch
+      : { key: routeKey, hasDraft: routeKey !== null && unsentKeys.has(routeKey) };
+  if (next.key === null || unsentKeys.has(next.key) === next.hasDraft) {
+    return { draftedKeys: unsentKeys, latch: next };
+  }
+  const draftedKeys = new Set(unsentKeys);
+  if (next.hasDraft) draftedKeys.add(next.key);
+  else draftedKeys.delete(next.key);
+  return { draftedKeys, latch: next };
 }
 
 /** "now", "5m", "3h", "2d" read as a time: "Now", "5m ago". */

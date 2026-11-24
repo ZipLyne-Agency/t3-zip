@@ -65,6 +65,8 @@ export function FileSurfaceAction(props: {
   readonly disabled?: boolean;
   readonly onPress: () => void;
   readonly children: ReactNode;
+  /** T3 Zip: a short visible label beside the icon; `label` stays the tooltip. */
+  readonly text?: string;
 }) {
   const pressed = props.pressed;
   return (
@@ -79,9 +81,10 @@ export function FileSurfaceAction(props: {
               onClick={props.onPress}
               aria-label={props.label}
               variant="ghost"
-              size="icon-sm"
+              size={props.text === undefined ? "icon-sm" : "sm"}
             >
               {props.children}
+              {props.text}
             </Button>
           ) : (
             <Toggle
