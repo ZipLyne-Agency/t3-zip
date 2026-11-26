@@ -203,7 +203,11 @@ export interface EnvironmentThreadShell {
   readonly autoSettleDisabledAt?: string | null;
   readonly mutedAt?: string | null;
   readonly mutedUntil?: string | null;
+  /** T3 Zip: when the mute was ended by hand. */
+  readonly unmutedAt?: string | null;
   readonly unmutedRunAt?: string | null;
+  /** T3 Zip: when the thread was last cleared from Done, on any device. */
+  readonly doneClearedAt?: string | null;
   readonly pinOrderKey: string | null;
   readonly activeOrderKey: string | null;
   readonly pullRequests: ReadonlyArray<import("@t3tools/contracts").ThreadPullRequestLink>;
@@ -365,7 +369,9 @@ export function presentThreadShell(
     autoSettleDisabledAt: nullableIso(thread.autoSettleDisabledAt ?? null),
     mutedAt: nullableIso(thread.mutedAt ?? null),
     mutedUntil: nullableIso(thread.mutedUntil ?? null),
+    unmutedAt: nullableIso(thread.unmutedAt ?? null),
     unmutedRunAt: nullableIso(thread.unmutedRunAt ?? null),
+    doneClearedAt: nullableIso(thread.doneClearedAt ?? null),
     pinOrderKey: thread.pinOrderKey ?? null,
     activeOrderKey: thread.activeOrderKey ?? null,
     ...(thread.lastVisitedAt === undefined

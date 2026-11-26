@@ -21,6 +21,7 @@ const directory: {
   entries: readonly ProjectEntry[];
   load: () => Promise<void>;
   refresh: () => void;
+  revalidate: (directoryPath: string) => void;
   ready: boolean;
   error: null;
   isPending: boolean;
@@ -29,6 +30,7 @@ const directory: {
   entries,
   load: () => Promise.resolve(),
   refresh: () => {},
+  revalidate: () => {},
   ready: true,
   error: null,
   isPending: false,
@@ -345,9 +347,14 @@ describe("FileBrowserPanel", () => {
 
     await userEvent.keyboard("{Escape}");
     await expect.element(search).toHaveValue("");
+    await expect.element(search).toHaveFocus();
+    await act(() => {
+      document.activeElement?.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Escape", repeat: true, bubbles: true }),
+      );
+    });
     expect(onCloseSheet).not.toHaveBeenCalled();
 
-    (search.element() as HTMLElement).focus();
     await userEvent.keyboard("{Escape}");
     await vi.waitFor(() => expect(onCloseSheet).toHaveBeenCalledOnce());
   });
@@ -373,9 +380,16 @@ describe("FileBrowserPanel", () => {
       );
     }
 
+    using revalidate = vi.spyOn(directory, "revalidate");
     await using _second = await render(panel());
     await vi.waitFor(() => expect(findTreeRow("src/")).not.toBeNull());
     await vi.waitFor(() => expect(findTreeRow("src/")!.getAttribute("aria-expanded")).toBe("true"));
+
+    // Refresh revalidates the folders behind the rows on screen: the open one and the root.
+    // The tree can render its rows again at any time, so compare folders, not calls.
+    revalidate.mockClear();
+    await userEvent.click(page.getByRole("button", { name: "Refresh workspace files" }));
+    expect(new Set(revalidate.mock.calls.flat())).toEqual(new Set(["src", ""]));
   });
   describe("revealing a folder while folders above it are still loading", () => {
     const roots = Array.from({ length: 12 }, (_, index): ProjectEntry => {

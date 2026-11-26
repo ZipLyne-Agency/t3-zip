@@ -79,19 +79,29 @@ export function isAwaitingClear(
 /** Where Done lists a thread: New until you open it, then Opened until you clear it. */
 export type DoneSection = "new" | "opened";
 
+/** T3 Zip: the later of the device's own clear mark and the one the server holds for every device. */
+function latestClear(local: string | undefined, synced: string | null | undefined) {
+  if (!synced) return local;
+  if (!local) return synced;
+  return Date.parse(synced) > Date.parse(local) ? synced : local;
+}
+
 /**
  * Where Done lists a thread, or null when it is not there. A New thread leaves once it is
  * cleared, even before the server records the visit; an Opened one follows isAwaitingClear.
- * Threads finished before `reviewSince` but never opened still list as New, as they did.
+ * Threads finished before `reviewSince` but never opened still list as New, as they did. A clear
+ * on any device counts: the thread's `doneClearedAt` comes from the server.
  */
 export function resolveDoneSection(
   status: OpenThreadStatus,
   muted: boolean,
-  thread: Parameters<typeof isAwaitingClear>[0],
-  clearedAt: string | undefined,
+  thread: Parameters<typeof isAwaitingClear>[0] &
+    Partial<Pick<EnvironmentThreadShell, "doneClearedAt">>,
+  localClearedAt: string | undefined,
   reviewSince: string | null,
 ): DoneSection | null {
   if (muted) return null;
+  const clearedAt = latestClear(localClearedAt, thread.doneClearedAt);
   if (status === "done") {
     const completedMs = Date.parse(thread.latestRun?.completedAt ?? "");
     const clearedMs = clearedAt ? Date.parse(clearedAt) : NaN;

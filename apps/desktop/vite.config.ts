@@ -4,6 +4,7 @@ import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
 import { defaultInclude, defineConfig } from "vite-plus";
+import { Rolldown } from "vite-plus/pack";
 
 import { isDesktopRuntimeExternalDependency } from "../../scripts/lib/desktop-external-packages.ts";
 import { loadRepoEnv } from "../../scripts/lib/public-config.ts";
@@ -34,6 +35,28 @@ const publicConfigDefine = {
     repoEnv.T3CODE_CLERK_PUBLISHABLE_KEY?.trim() ?? "",
   ),
 };
+
+const PAGE_WORLD_MODULE = /[\\/]src[\\/]preview[\\/]PageWorld\.ts$/;
+
+/**
+ * The preview preload passes `installPageWorld` to `contextBridge.executeInMainWorld`, which runs
+ * the function's source text in the page. Inline the module's imports into the function body so
+ * that text is complete on its own.
+ */
+const pageWorldFunction = (): Rolldown.Plugin => ({
+  name: "t3code:preview-page-world",
+  async load(id) {
+    if (!PAGE_WORLD_MODULE.test(id)) return null;
+    const bundle = await Rolldown.rolldown({ input: id, platform: "browser" });
+    try {
+      const { output } = await bundle.generate({ format: "iife", name: "pageWorld" });
+      for (const file of await bundle.watchFiles) this.addWatchFile(file);
+      return `export function installPageWorld(host) {\n${output[0].code}\nreturn pageWorld.installPageWorld(host);\n}\n`;
+    } finally {
+      await bundle.close();
+    }
+  },
+});
 
 export default defineConfig({
   run: {
@@ -145,11 +168,9 @@ export default defineConfig({
       sourcemap: true,
       outExtensions: () => ({ js: ".cjs" }),
       entry: ["src/preview-pick-preload.ts"],
+      plugins: [pageWorldFunction()],
       deps: {
-        alwaysBundle: (id) =>
-          id === "react-grab" ||
-          id.startsWith("react-grab/") ||
-          id === "@t3tools/shared/keybindingMatching",
+        alwaysBundle: (id) => id === "@t3tools/shared/keybindingMatching",
       },
     },
     {

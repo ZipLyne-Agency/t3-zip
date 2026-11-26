@@ -46,6 +46,7 @@ import {
   type ThreadTabEntry,
 } from "../tabs/useThreadTabs";
 import { Button } from "../ui/button";
+import { CollapsibleSectionHeader } from "../ui/collapsible-section-header";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { ClearAllButton, RAIL_FILTER_EMPTY_COPY, RailFilterBar } from "./RailFilters";
 import { NoProjectChip } from "./RailRows";
@@ -55,6 +56,7 @@ import { useUiStateStore } from "../../uiStateStore";
 import {
   backgroundRunningCount,
   resolveDoneSection,
+  sortRailMutedThreads,
   type DoneSection,
   type OpenThreadStatus,
 } from "./railStatus.logic";
@@ -151,8 +153,13 @@ function draftEntry(tab: DraftTabEntry): ColumnEntry {
 export function firstColumnThread(
   source: ReturnType<typeof useThreadTabsSource>,
   group: SidebarProjectSnapshot,
+  rememberedKey: string | null = null,
 ): ThreadTabEntry | null {
   const tabs = buildThreadTabEntries(source, new Set(groupMemberKeys(group))).tabs;
+  // T3 Zip: coming back to a project opens the thread you were last on, while it is still open.
+  const remembered =
+    rememberedKey === null ? undefined : tabs.find((tab) => tab.key === rememberedKey);
+  if (remembered !== undefined) return remembered;
   const sections = buildThreadColumnSections(
     tabs.map((tab) => threadEntry(tab, group, false)),
     "all",
@@ -483,6 +490,8 @@ function ThreadColumnPanel() {
   const { settleThread, confirmSettle } = useThreadActions();
   const [menuRequest, setMenuRequest] = useState<MenuRequest | null>(null);
   const [renamingKey, setRenamingKey] = useState<string | null>(null);
+  // T3 Zip: the scope's muted threads sit in a bar at the bottom, closed until you open it.
+  const [mutedOpen, setMutedOpen] = useState(false);
   const clearedAtById = useUiStateStore((state) => state.threadDoneClearedAtById);
   const doneReviewSince = useUiStateStore((state) => state.doneReviewSince);
   const clearFromDone = useClearFromDone();
@@ -511,15 +520,14 @@ function ThreadColumnPanel() {
   for (const member of column.groups) {
     for (const key of groupMemberKeys(member)) groupByMember.set(key, member);
   }
-  // Muted threads stay off the column; the Muted shelf lists them. All Projects also leaves out
-  // snoozed projects until they wake.
-  const threadTabs = buildThreadTabEntries(
+  // Muted threads stay off the lists; the Muted bar at the bottom lists the scope's own. All
+  // Projects also leaves out snoozed projects until they wake.
+  const scopeTabs = buildThreadTabEntries(
     source,
     allScope ? null : memberKeys,
     resolve,
   ).tabs.filter(
     (tab) =>
-      tab.mute === null &&
       !(
         allScope &&
         snoozedProjectKeys.has(
@@ -528,6 +536,21 @@ function ThreadColumnPanel() {
         )
       ),
   );
+  const threadTabs = scopeTabs.filter((tab) => tab.mute === null);
+  // Soonest to come back first, as on the rail's Muted shelf.
+  const mutedEntries = sortRailMutedThreads(
+    scopeTabs
+      .filter((tab) => tab.mute !== null)
+      .map((tab) => ({
+        ...tab.thread,
+        entry: threadEntry(
+          tab,
+          groupByMember.get(`${tab.thread.environmentId}:${tab.thread.projectId}`) ?? null,
+          false,
+        ),
+      })),
+    source.nowMs,
+  ).map((thread) => thread.entry);
   const drafts = useDraftTabs(memberKeys, column.routeDraftId);
   const unsentKeys = new Set(
     useComposerDraftStore(
@@ -761,7 +784,7 @@ function ThreadColumnPanel() {
   ) => {
     const label = resolve(HALF_HEADING[kind]);
     return (
-      <section aria-label={label} className="flex min-h-0 flex-col">
+      <section aria-label={label} className="flex min-h-0 min-w-0 flex-col">
         <h3 className="flex h-7 shrink-0 items-center justify-between gap-2 px-4 pt-1 text-xs font-semibold text-sidebar-foreground">
           <span>{label}</span>
           <span className="tabular-nums text-sidebar-muted-foreground">{counts[kind]}</span>
@@ -813,7 +836,7 @@ function ThreadColumnPanel() {
         <RailFilterBar filters={filterTabs} filter={filter} onChange={setFilter} counts={counts} />
       </div>
       {halves !== null ? (
-        <div className="grid min-h-0 flex-1 grid-rows-2 divide-y divide-(--rail-divider,var(--sidebar-border))">
+        <div className="grid min-h-0 flex-1 grid-cols-1 grid-rows-2 divide-y divide-(--rail-divider,var(--sidebar-border))">
           {renderHalf("done", halves.done)}
           {renderHalf("working", halves.working)}
         </div>
@@ -834,6 +857,31 @@ function ThreadColumnPanel() {
           )}
         </div>
       )}
+      {mutedEntries.length > 0 ? (
+        <section
+          aria-label={gt("Muted")}
+          className="shrink-0 border-t border-(--rail-divider,var(--sidebar-border)) px-2 py-1"
+        >
+          <CollapsibleSectionHeader
+            expanded={mutedOpen}
+            onClick={() => setMutedOpen((open) => !open)}
+            accessory={
+              <span className="flex shrink-0 items-center gap-1.5 tabular-nums">
+                <BellOffIcon aria-hidden className="size-3" />
+                {mutedEntries.length}
+              </span>
+            }
+          >
+            {gt("Muted")}
+          </CollapsibleSectionHeader>
+          {mutedOpen ? (
+            // Stays short so the lists above keep their room; it scrolls past a handful.
+            <ul className="flex max-h-56 flex-col gap-px overflow-y-auto overscroll-contain pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+              {mutedEntries.map((entry) => renderRow(entry, allScope))}
+            </ul>
+          ) : null}
+        </section>
+      ) : null}
       {menuRequest ? (
         <TabActionMenu
           key={menuRequest.id}

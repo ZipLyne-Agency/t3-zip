@@ -144,6 +144,7 @@ export const layer: Layer.Layer<ThreadForkServiceV2> = Layer.succeed(
         autoSettleDisabledAt: null,
         mutedAt: null,
         mutedUntil: null,
+        unmutedAt: null,
         unmutedRunAt: null,
         // A guest link belongs to the thread it was made for.
         guestShare: null,

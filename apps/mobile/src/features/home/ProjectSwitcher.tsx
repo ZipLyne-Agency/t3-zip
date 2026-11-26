@@ -173,6 +173,12 @@ export function ProjectSwitcherDrawer(props: DrawerProps) {
       }),
     );
   };
+  // A pick removes the drawer in the same render that switches the scope, with no slide-out, so
+  // the tap closes it at once even while the new scope's threads are still rendering.
+  const closeNow = () => {
+    closing.current = true;
+    onClosed();
+  };
   return (
     <Modal
       visible
@@ -194,6 +200,7 @@ export function ProjectSwitcherDrawer(props: DrawerProps) {
               progress={progress}
               drag={drag}
               onClose={close}
+              onCloseNow={closeNow}
             />
           </OverlayPortalScope>
         </SafeAreaProvider>
@@ -209,6 +216,7 @@ function DrawerBody(
     readonly progress: SharedValue<number>;
     readonly drag: SharedValue<number>;
     readonly onClose: () => void;
+    readonly onCloseNow: () => void;
   },
 ) {
   const gt = useGT();
@@ -218,14 +226,15 @@ function DrawerBody(
   const panelWidth = Math.min(Math.round(windowWidth * DRAWER_WIDTH_FRACTION), DRAWER_MAX_WIDTH);
   const searchRef = useRef<TextInputInstance>(null);
   const [query, setQuery] = useState("");
-  const { progress, drag, onClose: close, drawer, panel } = props;
+  const { progress, drag, onClose: close, onCloseNow: closeNow, drawer, panel } = props;
   const settled = useDrawerSettledShelf(drawer, panel === "settled");
   const shelfTitles = useShelfTitles();
   const bottomInset = Math.max(insets.bottom, 12);
 
+  // Closes first, so picking the project already shown, or All Projects, never waits on the switch.
   const pick = (projectKey: string | null) => {
+    closeNow();
     drawer.onPick(projectKey);
-    close();
   };
   const openThread = (thread: EnvironmentThreadShell) => {
     drawer.openThread(thread);

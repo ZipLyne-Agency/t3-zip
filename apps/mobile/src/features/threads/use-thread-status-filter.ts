@@ -31,6 +31,8 @@ export function useThreadStatusFilter() {
   const savePreferences = useAtomCommand(saveMobilePreferences);
   const visitThread = useAtomCommand(threadEnvironment.visit, { reportFailure: false });
   const markThreadUnread = useAtomCommand(threadEnvironment.markUnread, { reportFailure: false });
+  // T3 Zip: the server keeps clears for every device; an older server refuses this quietly.
+  const clearThreadDone = useAtomCommand(threadEnvironment.clearDone, { reportFailure: false });
   const loaded = AsyncResult.isSuccess(preferencesResult);
   const statusFilter: ThreadListStatusFilter = normalizeThreadStatusFilter(
     loaded ? (preferencesResult.value.threadListStatusFilter ?? "all") : "all",
@@ -66,6 +68,14 @@ export function useThreadStatusFilter() {
         threadDoneClears: applyClearMarks(current.threadDoneClears ?? base, keys, nowIso),
       }),
     });
+    const synced = targets.map(({ thread }) => ({
+      thread,
+      before: thread.doneClearedAt ?? null,
+      cleared: clearThreadDone({
+        environmentId: thread.environmentId,
+        input: { threadId: thread.id },
+      }),
+    }));
     const visits = targets.flatMap(({ thread, unread }) =>
       unread
         ? [
@@ -90,6 +100,14 @@ export function useThreadStatusFilter() {
               ? { threadDoneClears: restoreClearMarks(current.threadDoneClears, previous, nowIso) }
               : {},
         });
+        // The clear must land first, or putting the old mark back could reach the server before it.
+        for (const { thread, before, cleared } of synced) {
+          await cleared;
+          void clearThreadDone({
+            environmentId: thread.environmentId,
+            input: { threadId: thread.id, restore: before },
+          });
+        }
         // The visit must land first, or marking unread could reach the server before it.
         for (const { thread, visited } of visits) {
           await visited;

@@ -39,6 +39,23 @@ describe("thread mute", () => {
     expect(threadMuteEndsAt(mute, at(now))).toBe(endsAt);
   });
 
+  it("ends a mute the moment it is unmuted by hand, even on a clock rounded to the minute", () => {
+    // Unmuted at 10:00:30; a list's clock still reads 10:00:00 until the next minute.
+    const unmuted = {
+      mutedAt: iso("09:00"),
+      mutedUntil: "2026-11-16T10:00:30.000Z",
+      unmutedAt: "2026-11-16T10:00:30.000Z",
+    };
+    expect(isThreadMuted(unmuted, at("10:00"))).toBe(false);
+    expect(threadMuteEndsAt(unmuted, at("10:00"))).toBeUndefined();
+    // The window still covers the mute, so a run that finished inside it stays quiet.
+    expect(isMutedCompletion(unmuted, iso("09:30"))).toBe(true);
+    // Muting again starts a new mute that the earlier unmute does not end.
+    expect(
+      isThreadMuted({ ...unmuted, mutedAt: iso("10:05"), mutedUntil: null }, at("10:06")),
+    ).toBe(true);
+  });
+
   it("hides only runs that finished inside the mute", () => {
     const ended = { mutedAt: iso("09:00"), mutedUntil: iso("09:15") };
     expect(isMutedCompletion(ended, iso("09:10"))).toBe(true);

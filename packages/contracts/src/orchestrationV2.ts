@@ -77,6 +77,7 @@ import {
 import {
   ProviderApprovalDecision,
   ProviderApprovalFullAccessOverride,
+  ProviderApprovalPushHooks,
   ProviderApprovalOption,
   ProviderInteractionMode,
   ProviderRequestKind,
@@ -549,8 +550,12 @@ export const OrchestrationV2AppThread = Schema.Struct({
   autoSettleDisabledAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
   mutedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
   mutedUntil: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
+  /** T3 Zip: when the mute was ended by hand; a mute that began earlier is over. */
+  unmutedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
   /** Latest run activity outside any mute, recorded when a mute starts. */
   unmutedRunAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
+  /** T3 Zip: when the thread was last cleared from Done, on any device; absent reads as never. */
+  doneClearedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
   pinOrderKey: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   activeOrderKey: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   /** Absent on threads written before tags existed; read as empty. */
@@ -596,6 +601,8 @@ export type OrchestrationV2AppThread = typeof OrchestrationV2AppThread.Type;
 export const OrchestrationV2ThreadVisit = Schema.Struct({
   lastVisitedAt: OrchestrationV2AppThread.fields.lastVisitedAt,
   opens: OrchestrationV2AppThread.fields.opens,
+  // T3 Zip: a clear from Done is read state too; absent leaves the thread's mark as it is.
+  doneClearedAt: OrchestrationV2AppThread.fields.doneClearedAt,
 });
 export type OrchestrationV2ThreadVisit = typeof OrchestrationV2ThreadVisit.Type;
 
@@ -607,6 +614,7 @@ export function applyOrchestrationV2ThreadVisit<Thread extends OrchestrationV2Ap
     ...thread,
     lastVisitedAt: visit.lastVisitedAt,
     ...(visit.opens === undefined ? {} : { opens: visit.opens }),
+    ...(visit.doneClearedAt === undefined ? {} : { doneClearedAt: visit.doneClearedAt }),
   };
 }
 
@@ -901,6 +909,10 @@ export const OrchestrationV2RunAttempt = Schema.Struct({
   ]),
   startedAt: Schema.NullOr(Schema.DateTimeUtc),
   completedAt: Schema.NullOr(Schema.DateTimeUtc),
+  /** The thread's modes when this attempt's turn started. A later change reaches only the next turn. */
+  startedModes: Schema.optional(
+    Schema.Struct({ runtimeMode: RuntimeMode, interactionMode: ProviderInteractionMode }),
+  ),
 });
 export type OrchestrationV2RunAttempt = typeof OrchestrationV2RunAttempt.Type;
 
@@ -1124,6 +1136,8 @@ export const OrchestrationV2ProviderSession = Schema.Struct({
    * clients already released reject a literal they do not know; they show the ones they do.
    */
   startupPhase: Schema.optionalKey(TrimmedNonEmptyString.check(Schema.isMaxLength(64))),
+  /** Set by a session that serves several threads: the one thread whose start the phase describes. */
+  startupPhaseThreadId: Schema.optionalKey(ThreadId),
   createdAt: Schema.DateTimeUtc,
   updatedAt: Schema.DateTimeUtc,
   lastError: Schema.NullOr(Schema.String),
@@ -1227,6 +1241,8 @@ export const OrchestrationV2ProviderThreadNativeMetadata = Schema.Struct({
   claudeAttachmentBudget: Schema.optional(
     Schema.Struct({ bytesUsed: NonNegativeInt, pagesUsed: NonNegativeInt }),
   ),
+  /** MCP app notes already in the Claude session's history: note key to a digest of its text. */
+  claudeDeliveredAppContext: Schema.optional(Schema.Record(Schema.String, Schema.String)),
 });
 export type OrchestrationV2ProviderThreadNativeMetadata =
   typeof OrchestrationV2ProviderThreadNativeMetadata.Type;
@@ -1728,13 +1744,21 @@ const OrchestrationV2ProviderFailureMessage = TrimmedNonEmptyString.check(
 );
 const OrchestrationV2ProviderFailureCode = TrimmedNonEmptyString.check(Schema.isMaxLength(128));
 
-/** Producers must redact credentials before construction. */
+export const GoogleAccountVerificationUrl = TrimmedNonEmptyString.check(
+  Schema.isMaxLength(4_096),
+  Schema.isPattern(
+    /^https:\/\/accounts\.google\.com\/(?:v3\/)?signin\/continue\?[^\s\p{Cc}\\#]+$/u,
+  ),
+);
+
+/** Producers must redact credentials from diagnostic text before construction. */
 export const OrchestrationV2ProviderFailure = Schema.Struct({
   class: OrchestrationV2ProviderFailureClass,
   message: OrchestrationV2ProviderFailureMessage,
   code: Schema.NullOr(OrchestrationV2ProviderFailureCode),
   retryable: Schema.NullOr(Schema.Boolean),
   resetAt: Schema.optional(Schema.NullOr(IsoDateTime)),
+  verificationUrl: Schema.optionalKey(GoogleAccountVerificationUrl),
 });
 export type OrchestrationV2ProviderFailure = typeof OrchestrationV2ProviderFailure.Type;
 
@@ -2005,6 +2029,7 @@ export const OrchestrationV2TurnItem = Schema.Union([
     reason: Schema.optional(Schema.String),
     fullAccessOverride: Schema.optional(ProviderApprovalFullAccessOverride),
     appName: Schema.optional(Schema.String),
+    pushHooks: Schema.optional(ProviderApprovalPushHooks),
     options: Schema.optional(Schema.Array(ProviderApprovalOption)),
   }),
   Schema.Struct({
@@ -2469,8 +2494,12 @@ export const OrchestrationV2ThreadShell = Schema.Struct({
   autoSettleDisabledAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
   mutedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
   mutedUntil: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
+  /** T3 Zip: when the mute was ended by hand; a mute that began earlier is over. */
+  unmutedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
   /** Latest run activity outside any mute, recorded when a mute starts. */
   unmutedRunAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
+  /** T3 Zip: when the thread was last cleared from Done, on any device; absent reads as never. */
+  doneClearedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
   pinOrderKey: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   activeOrderKey: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   /** Absent on threads written before tags existed; read as empty. */
@@ -2646,7 +2675,9 @@ export const OrchestrationV2AppThreadJson = OrchestrationV2AppThread.mapFields((
   autoSettleDisabledAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtcFromString)),
   mutedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtcFromString)),
   mutedUntil: Schema.optional(Schema.NullOr(Schema.DateTimeUtcFromString)),
+  unmutedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtcFromString)),
   unmutedRunAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtcFromString)),
+  doneClearedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtcFromString)),
   lastVisitedAt: Schema.NullOr(Schema.DateTimeUtcFromString).pipe(
     Schema.withDecodingDefault(Effect.succeed(null)),
   ),
@@ -2673,6 +2704,7 @@ export type OrchestrationV2AppThreadJson = typeof OrchestrationV2AppThreadJson.T
 export const OrchestrationV2ThreadVisitJson = Schema.Struct({
   lastVisitedAt: OrchestrationV2AppThreadJson.fields.lastVisitedAt,
   opens: OrchestrationV2AppThreadJson.fields.opens,
+  doneClearedAt: OrchestrationV2AppThreadJson.fields.doneClearedAt,
 });
 
 export const OrchestrationV2RunJson = OrchestrationV2Run.mapFields((fields) => ({
@@ -2914,6 +2946,7 @@ export const OrchestrationV2TurnItemJson = Schema.Union([
     reason: Schema.optional(Schema.String),
     fullAccessOverride: Schema.optional(ProviderApprovalFullAccessOverride),
     appName: Schema.optional(Schema.String),
+    pushHooks: Schema.optional(ProviderApprovalPushHooks),
     options: Schema.optional(Schema.Array(ProviderApprovalOption)),
   }),
   Schema.Struct({
@@ -3111,7 +3144,9 @@ export const OrchestrationV2ThreadShellJson = OrchestrationV2ThreadShell.mapFiel
   autoSettleDisabledAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtcFromString)),
   mutedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtcFromString)),
   mutedUntil: Schema.optional(Schema.NullOr(Schema.DateTimeUtcFromString)),
+  unmutedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtcFromString)),
   unmutedRunAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtcFromString)),
+  doneClearedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtcFromString)),
   lastVisitedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtcFromString)),
   titleRegeneration: Schema.optional(
     Schema.NullOr(
@@ -3487,6 +3522,14 @@ export const OrchestrationV2Command = Schema.Union([
     commandId: CommandId,
     threadId: ThreadId,
   }),
+  // T3 Zip: clears the thread from Done on every device, as of the server's clock. Undo passes
+  // `restore` with the mark from before the clear, or null when it had none.
+  Schema.Struct({
+    type: Schema.Literal("thread.done.clear"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    restore: Schema.optional(Schema.NullOr(IsoDateTime)),
+  }),
   Schema.Struct({
     type: Schema.Literal("thread.metadata.update"),
     commandId: CommandId,
@@ -3740,6 +3783,7 @@ export const OrchestrationV2Command = Schema.Union([
   }),
   Schema.Struct({
     type: Schema.Literal("queued-run.edit"),
+    modelSelection: Schema.optional(ModelSelection),
     context: Schema.optional(OrchestrationMessageContext),
     commandId: CommandId,
     threadId: ThreadId,

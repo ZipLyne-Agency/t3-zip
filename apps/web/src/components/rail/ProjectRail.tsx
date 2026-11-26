@@ -337,16 +337,20 @@ export function ProjectRail() {
     else void navigateToThread(scopeThreadRef(target.environmentId, target.id));
   };
 
-  // With the thread column, a project click lists its threads there and opens the one at the
-  // top, so the chat leaves the old project too. A project with no open thread starts one.
-  // Clicking the project already open only brings its list back.
+  // With the thread column, a project click lists its threads there and opens the one you were
+  // last on, or the one at the top, so the chat leaves the old project too. A project with no
+  // open thread starts one. Clicking the project already open only brings its list back.
   const openInColumn = (project: RailProject, startNew: () => void) => {
     const projectKey = project.group.projectKey;
     if (projectKey === column.routeProjectKey) {
       column.choose(projectKey);
       return;
     }
-    const first = firstColumnThread(tabsSource, project.group);
+    const first = firstColumnThread(
+      tabsSource,
+      project.group,
+      lastThreadByProject[projectKey] ?? null,
+    );
     if (first === null) {
       column.choose(projectKey);
       startNew();

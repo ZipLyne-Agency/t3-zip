@@ -6,6 +6,11 @@ export interface ThreadMuteFields {
   readonly mutedAt?: Instant;
   /** Absent or null while muted means the mute lasts until the user unmutes. */
   readonly mutedUntil?: Instant;
+  /**
+   * T3 Zip: when the mute was ended by hand. It ends the mute regardless of the reader's clock, which
+   * lists round down to the minute, so an unmute never lingers until the next minute.
+   */
+  readonly unmutedAt?: Instant;
 }
 
 function toMillis(value: Instant): number | null {
@@ -16,7 +21,10 @@ function toMillis(value: Instant): number | null {
 
 /** The mute is in effect at `nowMs`. A timed mute expires without an event. */
 export function isThreadMuted(thread: ThreadMuteFields, nowMs: number): boolean {
-  if (toMillis(thread.mutedAt) === null) return false;
+  const mutedAtMs = toMillis(thread.mutedAt);
+  if (mutedAtMs === null) return false;
+  const unmutedAtMs = toMillis(thread.unmutedAt);
+  if (unmutedAtMs !== null && unmutedAtMs >= mutedAtMs) return false;
   const untilMs = toMillis(thread.mutedUntil);
   return untilMs === null || nowMs < untilMs;
 }

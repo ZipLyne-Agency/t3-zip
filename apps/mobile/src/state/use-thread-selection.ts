@@ -106,6 +106,7 @@ function threadDetailToShell(
     autoSettleDisabledAt: thread.autoSettleDisabledAt,
     mutedAt: thread.mutedAt,
     mutedUntil: thread.mutedUntil,
+    unmutedAt: thread.unmutedAt,
     pinnedAt: thread.pinnedAt,
     pinOrderKey: thread.pinOrderKey,
     snoozedUntil: thread.snoozedUntil ?? null,

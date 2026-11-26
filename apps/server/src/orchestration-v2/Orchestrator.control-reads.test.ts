@@ -20,6 +20,7 @@ import {
   RunAttemptId,
   RunId,
   RuntimeRequestId,
+  OrchestrationV2ThreadShellJson,
   ThreadId,
   TurnItemId,
 } from "@t3tools/contracts";
@@ -33,6 +34,7 @@ import * as Layer from "effect/Layer";
 import * as Metric from "effect/Metric";
 import * as Option from "effect/Option";
 import * as Result from "effect/Result";
+import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import * as Tracer from "effect/Tracer";
@@ -581,6 +583,54 @@ it.effect("mark unread leaves a future snooze untouched", () =>
   }).pipe(Effect.provide(layerTest)),
 );
 
+const encodeShellJson = Schema.encodeSync(OrchestrationV2ThreadShellJson);
+const decodeShellJson = Schema.decodeUnknownSync(OrchestrationV2ThreadShellJson);
+
+it.effect("a clear from Done reaches every device and Undo puts the old mark back", () =>
+  Effect.gen(function* () {
+    const orchestrator = yield* Orchestrator.OrchestratorV2;
+    const projections = yield* ProjectionStore.ProjectionStoreV2;
+    const { threadId } = yield* completeAndSnoozeThread("done-clear", 60);
+    const before = yield* projections.getThread(threadId);
+    yield* TestClock.adjust("1 minute");
+    const clearedAt = yield* DateTime.now;
+    yield* orchestrator.dispatch({
+      type: "thread.done.clear",
+      commandId: CommandId.make("done-clear"),
+      threadId,
+    });
+    // Only the mark changes: read state, order and updatedAt stay as they were.
+    assert.deepEqual(yield* projections.getThread(threadId), {
+      ...before,
+      doneClearedAt: clearedAt,
+    });
+    // Other devices read it from the shell, as the client decodes it from the wire.
+    const shell = yield* projections.getThreadShell(threadId);
+    assert.isNotNull(shell);
+    const wire = decodeShellJson(encodeShellJson(shell!));
+    assert.deepEqual(wire.doneClearedAt, clearedAt);
+
+    // A later read-state change keeps the mark.
+    yield* orchestrator.dispatch({
+      type: "thread.mark-unread",
+      commandId: CommandId.make("done-clear-mark-unread"),
+      threadId,
+    });
+    assert.deepEqual((yield* projections.getThread(threadId)).doneClearedAt, clearedAt);
+
+    // Undo puts back the mark from before; doing it twice is not an error.
+    for (const attempt of ["first", "again"]) {
+      yield* orchestrator.dispatch({
+        type: "thread.done.clear",
+        commandId: CommandId.make(`done-clear-undo-${attempt}`),
+        threadId,
+        restore: null,
+      });
+      assert.isNull((yield* projections.getThread(threadId)).doneClearedAt);
+    }
+  }).pipe(Effect.provide(layerTest)),
+);
+
 it.effect(
   "dispatches metadata, queue resume and request controls without hydrating unrelated history",
   () =>
@@ -1012,6 +1062,12 @@ it.effect("mutes for a while or until unmuted without marking the thread active"
         assert.ok(shell.mutedUntil);
         if (endedAt !== undefined) assert.deepEqual(shell.mutedUntil, endedAt);
         endedAt = shell.mutedUntil;
+        // The unmute is stamped, so a reader whose clock lags (lists round down to the minute)
+        // still sees the mute over.
+        assert.deepEqual(shell.unmutedAt, shell.mutedUntil);
+        assert.isFalse(isThreadMuted(shell, nowMs - 60_000));
+      } else {
+        assert.isNull(shell.unmutedAt ?? null);
       }
       assert.deepEqual(shell.updatedAt, created.updatedAt);
     }

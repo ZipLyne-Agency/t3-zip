@@ -148,6 +148,11 @@ export interface VisitThreadInput extends ThreadCommandInput {
 
 export type MarkThreadUnreadInput = ThreadCommandInput;
 
+/** T3 Zip: absent `restore` clears now; Undo passes the mark from before, or null. */
+export interface ClearThreadDoneInput extends ThreadCommandInput {
+  readonly restore?: string | null;
+}
+
 export interface UpdateThreadMetadataInput extends ThreadCommandInput {
   readonly limitRecovery?: import("@t3tools/contracts").OrchestrationV2LimitRecoveryUpdate | null;
   readonly title?: string;
@@ -281,6 +286,7 @@ export interface RetryWorkspacePreparationInput extends ThreadCommandInput {
 }
 
 export interface EditQueuedRunInput extends ThreadCommandInput {
+  readonly modelSelection?: ModelSelection;
   readonly runId: RunId;
   readonly text: string;
   /**
@@ -727,6 +733,17 @@ export const markThreadUnread = Effect.fn("EnvironmentCommands.markThreadUnread"
     type: "thread.mark-unread",
     commandId: yield* allocateCommandId(input),
     threadId: input.threadId,
+  });
+});
+
+export const clearThreadDone = Effect.fn("EnvironmentCommands.clearThreadDone")(function* (
+  input: ClearThreadDoneInput,
+) {
+  return yield* dispatch({
+    type: "thread.done.clear",
+    commandId: yield* allocateCommandId(input),
+    threadId: input.threadId,
+    ...(input.restore === undefined ? {} : { restore: input.restore }),
   });
 });
 
@@ -1242,6 +1259,7 @@ export const editQueuedRun = Effect.fn("EnvironmentCommands.editQueuedRun")(func
     threadId: input.threadId,
     runId: input.runId,
     text: input.text,
+    ...(input.modelSelection ? { modelSelection: input.modelSelection } : {}),
     ...(attachments === undefined ? {} : { attachments }),
     ...(input.edit?.context && attachments
       ? {

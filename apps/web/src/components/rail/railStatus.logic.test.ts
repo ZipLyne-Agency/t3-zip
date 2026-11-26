@@ -350,4 +350,33 @@ describe("resolveDoneSection", () => {
     expect(resolveDoneSection("working", false, finished, undefined, null)).toBe(null);
     expect(resolveDoneSection("done", true, finished, undefined, null)).toBe(null);
   });
+
+  it("honors a clear made on another device, whichever mark is later", () => {
+    const clearedElsewhere = { ...finished, doneClearedAt: "2026-11-16T13:30:00.000Z" };
+    expect(resolveDoneSection("done", false, clearedElsewhere, undefined, null)).toBe(null);
+    expect(resolveDoneSection("idle", false, clearedElsewhere, undefined, null)).toBe(null);
+    // An older mark on either side does not bring the thread back.
+    expect(
+      resolveDoneSection("idle", false, clearedElsewhere, "2026-11-16T12:00:00.000Z", null),
+    ).toBe(null);
+    expect(
+      resolveDoneSection(
+        "idle",
+        false,
+        { ...finished, doneClearedAt: "2026-11-16T12:00:00.000Z" },
+        "2026-11-16T13:30:00.000Z",
+        null,
+      ),
+    ).toBe(null);
+    // A run that finishes after the clear lists it again.
+    expect(
+      resolveDoneSection(
+        "done",
+        false,
+        { ...finished, doneClearedAt: "2026-11-16T12:00:00.000Z" },
+        undefined,
+        null,
+      ),
+    ).toBe("new");
+  });
 });
