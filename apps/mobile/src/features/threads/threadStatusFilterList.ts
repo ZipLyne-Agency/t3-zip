@@ -117,6 +117,16 @@ function byKey(left: ThreadStatusEntry, right: ThreadStatusEntry): number {
   return left.key < right.key ? -1 : 1;
 }
 
+/**
+ * Working and Done share one tab only inside a single project. All Projects and No Project give
+ * each its own tab, since across many threads one half of the screen is too short for either.
+ */
+export function combinesWorkingAndDone(
+  scope: Pick<HomeProjectScope, "representative"> | null,
+): boolean {
+  return scope !== null && scope.representative.isScratch !== true;
+}
+
 /** The project a Done thread lists under when every project is shown. */
 export interface ThreadStatusProjectGroup {
   readonly key: string;

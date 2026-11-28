@@ -46,7 +46,11 @@ import {
   ThreadStatusProjectHeader,
   ThreadStatusSectionHeader,
 } from "./ThreadStatusFilterBar";
-import { buildThreadStatusProjectGroups, threadStatusDoneThreads } from "./threadStatusFilterList";
+import {
+  buildThreadStatusProjectGroups,
+  combinesWorkingAndDone,
+  threadStatusDoneThreads,
+} from "./threadStatusFilterList";
 import { useThreadStatusFilter } from "./use-thread-status-filter";
 import { useSidebarRowThreadKey } from "./useSidebarRowThreadKey";
 import { useThreadJumpShortcuts } from "../keyboard/threadKeyboardShortcuts";
@@ -296,7 +300,7 @@ function ThreadNavigationSidebarPane(props: ThreadNavigationSidebarProps) {
     setStatusFilter,
     clears: doneClears,
     clearFromDone,
-  } = useThreadStatusFilter();
+  } = useThreadStatusFilter(combinesWorkingAndDone(selectedProjectScope));
   const {
     layout: threadListV2Layout,
     items: threadListV2Items,
@@ -649,7 +653,7 @@ function ThreadNavigationSidebarPane(props: ThreadNavigationSidebarProps) {
   const statusBar =
     props.searchQuery.trim().length > 0 ? null : (
       <ThreadStatusFilterBar
-        filters={threadStatusFilters(true)}
+        filters={threadStatusFilters(combinesWorkingAndDone(selectedProjectScope))}
         selected={statusFilter}
         counts={statusCounts}
         openCount={statusEntries.length}

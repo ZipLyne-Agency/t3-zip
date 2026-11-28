@@ -13,6 +13,7 @@ import {
   PROMPT_STASH_STORAGE_KEY,
   MAX_STASH_ENTRY_ATTACHMENT_CHARS,
   partitionStashAttachments,
+  stashEntryInScope,
   usePromptStashStore,
   writePromptStashStorageForTest,
   type PromptStashEntry,
@@ -22,9 +23,11 @@ function makeEntry(input: {
   id: string;
   prompt?: string;
   attachmentChars?: number;
-}): PromptStashEntry {
+  scope?: string;
+}): PromptStashEntry & { readonly scope: string } {
   return {
     id: input.id,
+    scope: input.scope ?? "thread-a",
     createdAt: "2026-07-24T12:00:00.000Z",
     prompt: input.prompt ?? `prompt ${input.id}`,
     attachments:
@@ -115,16 +118,55 @@ describe("promptStashStore", () => {
     expect(usePromptStashStore.getState().takeEntry("citation-stash").entry).toBeNull();
   });
 
-  it("evicts the oldest entry past the cap and returns it", () => {
+  it("refuses a new entry when full instead of discarding the oldest", () => {
     const store = usePromptStashStore.getState();
     for (let index = 0; index < MAX_STASH_ENTRIES; index += 1) {
-      expect(store.stashEntry(makeEntry({ id: `entry-${index}` })).evicted).toBeNull();
+      expect(store.stashEntry(makeEntry({ id: `entry-${index}` })).written).toBe(true);
     }
-    const { evicted } = store.stashEntry(makeEntry({ id: "overflow" }));
-    expect(evicted?.id).toBe("entry-0");
+    const result = store.stashEntry(makeEntry({ id: "overflow" }));
+    expect(result).toEqual({ full: true, written: false, durable: false });
     const entries = usePromptStashStore.getState().entries;
     expect(entries).toHaveLength(MAX_STASH_ENTRIES);
-    expect(entries[0]?.id).toBe("overflow");
+    expect(entries.map((entry) => entry.id)).not.toContain("overflow");
+    expect(entries.map((entry) => entry.id)).toContain("entry-0");
+  });
+
+  it("fills each thread's stash without blocking another thread's", () => {
+    const store = usePromptStashStore.getState();
+    for (let index = 0; index < MAX_STASH_ENTRIES; index += 1) {
+      expect(store.stashEntry(makeEntry({ id: `entry-${index}` })).written).toBe(true);
+    }
+    expect(store.stashEntry(makeEntry({ id: "overflow" }))).toEqual({
+      full: true,
+      written: false,
+      durable: false,
+    });
+    expect(store.stashEntry(makeEntry({ id: "other-thread", scope: "thread-b" })).written).toBe(
+      true,
+    );
+    const entries = usePromptStashStore.getState().entries;
+    expect(entries.filter((entry) => stashEntryInScope(entry, "thread-a"))).toHaveLength(
+      MAX_STASH_ENTRIES,
+    );
+    expect(entries.some((entry) => entry.id === "other-thread")).toBe(true);
+  });
+
+  it("lists an entry from before per-thread stashes in every thread", () => {
+    const { scope: _scope, ...legacy } = makeEntry({ id: "legacy" });
+    expect(stashEntryInScope(legacy, "thread-a")).toBe(true);
+    expect(stashEntryInScope(legacy, "thread-b")).toBe(true);
+    expect(stashEntryInScope(makeEntry({ id: "scoped" }), "thread-b")).toBe(false);
+  });
+
+  it("moves a draft's entries onto the thread it became", () => {
+    const store = usePromptStashStore.getState();
+    store.stashEntry(makeEntry({ id: "drafted", scope: "draft-1" }));
+    store.stashEntry(makeEntry({ id: "elsewhere", scope: "thread-b" }));
+    store.rescopeEntries("draft-1", "thread-new");
+    const scopes = Object.fromEntries(
+      usePromptStashStore.getState().entries.map((entry) => [entry.id, entry.scope]),
+    );
+    expect(scopes).toEqual({ drafted: "thread-new", elsewhere: "thread-b" });
   });
 
   // regression: #4787 stashed prompts were lost when switching providers

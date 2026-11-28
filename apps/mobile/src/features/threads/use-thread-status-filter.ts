@@ -24,9 +24,10 @@ export interface ClearFromDoneTarget {
 /**
  * The thread list's status filter and Done's clear marks, both kept on this device. The first
  * load starts keeping finished threads from now, so older ones never flood Opened. The saved
- * filter is read onto a tab the list shows: every scope combines Working and Done.
+ * filter is read onto a tab the list shows: `combined` (one project) folds Working and Done into
+ * one tab, and every other scope lists them apart.
  */
-export function useThreadStatusFilter() {
+export function useThreadStatusFilter(combined: boolean) {
   const preferencesResult = useAtomValue(mobilePreferencesAtom);
   const savePreferences = useAtomCommand(saveMobilePreferences);
   const visitThread = useAtomCommand(threadEnvironment.visit, { reportFailure: false });
@@ -36,7 +37,7 @@ export function useThreadStatusFilter() {
   const loaded = AsyncResult.isSuccess(preferencesResult);
   const statusFilter: ThreadListStatusFilter = normalizeThreadStatusFilter(
     loaded ? (preferencesResult.value.threadListStatusFilter ?? "all") : "all",
-    true,
+    combined,
   );
   const clears = loaded ? (preferencesResult.value.threadDoneClears ?? null) : null;
   const needsReviewStart = loaded && clears === null;

@@ -16,6 +16,7 @@ import {
   type FakeDriver,
 } from "../../../test/fakeEnvironment";
 import { render } from "../../../test/render";
+import { useProjectRailStore } from "./railStore";
 
 // The socket is the only fake layer; see test/appScenarios.renders.tsx.
 vi.mock(
@@ -121,4 +122,32 @@ it("lists the open project's threads in the column beside the rail", async () =>
   await expect.element(column).not.toBeInTheDocument();
   await userEvent.click(page.getByRole("button", { name: "Show Thread List" }));
   await expect.element(page.getByRole("region", { name: "Thread List" })).toBeVisible();
+});
+
+it("sending a message in a hidden project brings it back to the rail", async () => {
+  const thread = threadWithHistory("thread-a", 1);
+  using _environment = installFakeEnvironment([thread]);
+  __setClientSettingsForTests({
+    ...DEFAULT_CLIENT_SETTINGS,
+    sidebarLayout: "project-rail",
+    onboardingCompletedAt: "2026-01-01T00:00:00.000Z",
+  });
+  await page.viewport(1400, 900);
+  const router = getRouter(
+    createMemoryHistory({ initialEntries: [`/${ENVIRONMENT_ID}/${thread.id}`] }),
+  );
+  await router.load();
+  await using _app = await render(<AppRoot router={router} />, { router: false });
+
+  const column = page.getByRole("region", { name: "Thread List" });
+  await expect.element(column.getByRole("heading", { name: "render" })).toBeVisible();
+  await userEvent.click(page.getByRole("button", { name: "Actions for render" }));
+  await userEvent.click(page.getByRole("menuitem", { name: "Hide Project" }));
+  await vi.waitFor(() => expect(useProjectRailStore.getState().hiddenProjects).toHaveLength(1));
+
+  const editor = page.getByTestId("composer-editor");
+  await userEvent.click(editor);
+  await userEvent.keyboard("keep going");
+  await userEvent.keyboard("{Enter}");
+  await vi.waitFor(() => expect(useProjectRailStore.getState().hiddenProjects).toEqual([]));
 });

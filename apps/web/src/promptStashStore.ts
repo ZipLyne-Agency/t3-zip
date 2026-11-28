@@ -5,6 +5,8 @@ import { create } from "zustand";
 import {
   PersistedComposerFileAttachment,
   PersistedComposerImageAttachment,
+  composerTargetKey,
+  useComposerDraftStore,
 } from "./composerDraftStore";
 import { createMemoryStorage, type StateStorage } from "./lib/storage";
 
@@ -12,7 +14,8 @@ export const PROMPT_STASH_STORAGE_KEY = "t3code:prompt-stash:v2";
 const LEGACY_PROMPT_STASH_STORAGE_KEY = "t3code:prompt-stash:v1";
 const PROMPT_STASH_STORAGE_VERSION = 2;
 
-export const MAX_STASH_ENTRIES = 20;
+// A sanity bound; storage quota is the real limit and reports its own failure.
+export const MAX_STASH_ENTRIES = 100;
 // Share localStorage's ~5MB quota with drafts; record oversized attachments in droppedImageNames.
 export const MAX_STASH_ENTRY_ATTACHMENT_CHARS = 2_700_000;
 
@@ -26,6 +29,11 @@ const StashEntrySchema = Schema.Struct({
   unreadableImageNames: Schema.optionalKey(Schema.Array(Schema.String)),
   pendingImageCount: Schema.optionalKey(Schema.Number),
   records: Schema.optionalKey(ForwardCompatibleArray(ComposerContextRecord)),
+  /**
+   * The composer the prompt was stashed from (`composerTargetKey`). Entries stashed before the
+   * stash became per thread have none and show in every thread until restored or deleted.
+   */
+  scope: Schema.optionalKey(Schema.String),
 });
 export type PromptStashEntry = typeof StashEntrySchema.Type;
 
@@ -50,6 +58,11 @@ function clearOrphanedPendingImages(entry: PromptStashEntry): PromptStashEntry {
       ),
     ],
   };
+}
+
+/** Whether an entry belongs in the stash of the composer keyed `scope`. */
+export function stashEntryInScope(entry: PromptStashEntry, scope: string): boolean {
+  return entry.scope === undefined || entry.scope === scope;
 }
 
 export function partitionStashAttachments(
@@ -152,9 +165,11 @@ function latestEntries(memory: ReadonlyArray<PromptStashEntry>): ReadonlyArray<P
 
 interface PromptStashStoreState {
   entries: ReadonlyArray<PromptStashEntry>;
-  stashEntry: (entry: PromptStashEntry) => {
-    evicted: PromptStashEntry | null;
-    /** False when the write failed outright (e.g. quota); nothing was kept. */
+  /** `entry.scope` names the composer it belongs to. */
+  stashEntry: (entry: PromptStashEntry & { readonly scope: string }) => {
+    /** True when this thread's stash already holds MAX_STASH_ENTRIES; nothing was written. */
+    full: boolean;
+    /** False when the write failed outright (e.g. quota or a full stash); nothing was kept. */
     written: boolean;
     /** False for failed writes or in-memory fallback; the entry will not survive reload. */
     durable: boolean;
@@ -170,20 +185,28 @@ interface PromptStashStoreState {
       unreadableImageNames: ReadonlyArray<string>;
     },
   ) => { attached: boolean; durable: boolean };
+  /** Moves a draft's entries onto the thread it became. */
+  rescopeEntries: (from: string, to: string) => void;
 }
 
 export const usePromptStashStore = create<PromptStashStoreState>()((set, get) => ({
   entries: [],
   stashEntry: (entry) => {
-    const nextEntries = [entry, ...latestEntries(get().entries)];
-    const evicted = nextEntries.length > MAX_STASH_ENTRIES ? (nextEntries.pop() ?? null) : null;
+    const currentEntries = latestEntries(get().entries);
+    // Never discard a stashed prompt to make room; the user decides what to remove.
+    // T3 Zip: each thread shows only its own stash, so only its entries count toward the cap.
+    const inScope = currentEntries.filter((candidate) => stashEntryInScope(candidate, entry.scope));
+    if (inScope.length >= MAX_STASH_ENTRIES) {
+      return { full: true, written: false, durable: false };
+    }
+    const nextEntries = [entry, ...currentEntries];
     const { written, durable } = persistEntries(nextEntries);
-    // Failed writes must not duplicate the intact composer; eviction also commits only on success.
+    // Failed writes must not duplicate the intact composer.
     if (!written) {
-      return { evicted: null, written: false, durable: false };
+      return { full: false, written: false, durable: false };
     }
     set(() => ({ entries: nextEntries }));
-    return { evicted, written: true, durable };
+    return { full: false, written: true, durable };
   },
   takeEntry: (entryId) => {
     const entries = latestEntries(get().entries);
@@ -213,7 +236,25 @@ export const usePromptStashStore = create<PromptStashStoreState>()((set, get) =>
     set(() => ({ entries: nextEntries }));
     return { attached: true, durable };
   },
+  rescopeEntries: (from, to) => {
+    const entries = latestEntries(get().entries);
+    if (!entries.some((entry) => entry.scope === from)) return;
+    const nextEntries = entries.map((entry) =>
+      entry.scope === from ? { ...entry, scope: to } : entry,
+    );
+    persistEntries(nextEntries);
+    set(() => ({ entries: nextEntries }));
+  },
 }));
+
+// A new thread's composer is a draft until its first send; its stash follows it to the thread.
+useComposerDraftStore.subscribe((state, previous) => {
+  if (state.promotedDraftRedirects === previous.promotedDraftRedirects) return;
+  for (const [draftKey, threadRef] of Object.entries(state.promotedDraftRedirects)) {
+    if (previous.promotedDraftRedirects[draftKey]) continue;
+    usePromptStashStore.getState().rescopeEntries(draftKey, composerTargetKey(threadRef));
+  }
+});
 
 {
   try {

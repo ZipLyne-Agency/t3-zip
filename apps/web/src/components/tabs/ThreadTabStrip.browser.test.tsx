@@ -130,3 +130,21 @@ it("steps aside while the thread column lists the same threads", async () => {
     .toBeVisible();
   expect(document.querySelector("[data-thread-tabs]")).toBeNull();
 });
+
+it("sending from a tab in a hidden project brings the project back", async () => {
+  const { environment, app, second } = await renderTabs();
+  using _environment = environment;
+  await using _app = app;
+
+  await userEvent.click(page.getByRole("button", { name: "Actions for render" }));
+  await userEvent.click(page.getByRole("menuitem", { name: "Hide Project" }));
+  await vi.waitFor(() => expect(useProjectRailStore.getState().hiddenProjects).toHaveLength(1));
+
+  await userEvent.click(page.getByRole("tab", { name: new RegExp(`^${second.title}`) }));
+  const editor = page.getByTestId("composer-editor");
+  await userEvent.click(editor);
+  await userEvent.keyboard("keep going");
+  await userEvent.keyboard("{Enter}");
+  await vi.waitFor(() => expect(dispatchedCommands().length).toBeGreaterThan(0));
+  await vi.waitFor(() => expect(useProjectRailStore.getState().hiddenProjects).toEqual([]));
+});

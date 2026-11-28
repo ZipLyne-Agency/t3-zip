@@ -72,6 +72,7 @@ import {
 } from "../threads/ThreadStatusFilterBar";
 import {
   buildThreadStatusProjectGroups,
+  combinesWorkingAndDone,
   threadStatusDoneThreads,
 } from "../threads/threadStatusFilterList";
 import { useThreadStatusFilter } from "../threads/use-thread-status-filter";
@@ -459,7 +460,7 @@ export function HomeScreen(props: HomeScreenProps) {
     setStatusFilter,
     clears: doneClears,
     clearFromDone,
-  } = useThreadStatusFilter();
+  } = useThreadStatusFilter(combinesWorkingAndDone(v2ScopedProjectGroup));
   const {
     layout: threadListV2Layout,
     items: threadListV2Items,
@@ -854,7 +855,7 @@ export function HomeScreen(props: HomeScreenProps) {
       {projectSwitcher}
       {hasSearchQuery ? null : (
         <ThreadStatusFilterBar
-          filters={threadStatusFilters(true)}
+          filters={threadStatusFilters(combinesWorkingAndDone(v2ScopedProjectGroup))}
           selected={statusFilter}
           counts={statusCounts}
           openCount={statusEntries.length}

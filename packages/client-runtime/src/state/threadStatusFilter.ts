@@ -118,9 +118,9 @@ export function resolveDoneSection(
 export type ThreadStatusFilter = "all" | "waiting" | "working" | "done" | "workingDone";
 
 /**
- * The tabs a list shows, in order. Thread lists combine Working and Done into one tab in every
- * scope, since switching between them is constant; the desktop rail's own queue, shown when the
- * thread list is closed, keeps them apart.
+ * The tabs a list shows, in order. The desktop thread list combines Working and Done into one tab
+ * in every scope, and the phone's only inside one project; the desktop rail's own queue and the
+ * phone's All Projects and No Project lists keep them apart.
  */
 export function threadStatusFilters(combined: boolean): ReadonlyArray<ThreadStatusFilter> {
   return combined ? ["all", "waiting", "workingDone"] : ["all", "waiting", "working", "done"];

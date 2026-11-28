@@ -10,6 +10,7 @@ import {
   buildThreadStatusEntries,
   buildThreadStatusFilterRows,
   buildThreadStatusListItems,
+  combinesWorkingAndDone,
   countThreadStatusEntries,
   pruneClearMarks,
   restoreClearMarks,
@@ -190,6 +191,18 @@ describe("Working · Done", () => {
     });
     expect(rows.split).toBeNull();
     expect(titles(rows.items)).toEqual(["v2-pending", "running"]);
+  });
+});
+
+describe("combinesWorkingAndDone", () => {
+  const scope = (isScratch: boolean) => ({
+    representative: { isScratch } as unknown as EnvironmentProject,
+  });
+
+  it("combines only inside one project", () => {
+    expect(combinesWorkingAndDone(scope(false))).toBe(true);
+    expect(combinesWorkingAndDone(null)).toBe(false);
+    expect(combinesWorkingAndDone(scope(true))).toBe(false);
   });
 });
 
